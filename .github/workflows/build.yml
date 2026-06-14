@@ -1,0 +1,45 @@
+name: Build Firmware
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Dependencies
+        run: sudo apt install -y cmake gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib
+
+      - name: Get Pico SDK
+        run: git clone --branch 2.1.0 --recurse-submodules https://github.com/raspberrypi/pico-sdk.git
+
+      - name: Get Pico PIO USB
+        run: git clone https://github.com/sekigon-gonnoc/Pico-PIO-USB.git
+
+      - name: Create Build Folder
+        run: mkdir -p build output
+
+      - name: Build Firmware
+        run: |
+          cd build
+          cmake -DPICO_SDK_PATH=${{ github.workspace }}/pico-sdk \
+                -DPICO_PIO_USB_PATH=${{ github.workspace }}/Pico-PIO-USB \
+                -DCMAKE_BUILD_TYPE=Release \
+                ..
+          cmake --build . --parallel
+          cp *.uf2 ../output/ 2>/dev/null || true
+
+      - name: Upload UF2 Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: uf2-adafruit-feather
+          path: output/*.uf2
