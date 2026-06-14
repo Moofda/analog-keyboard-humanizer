@@ -8,15 +8,13 @@
 
 #include "tusb.h"
 #include "xinput_host.h"
+#include "tud_xinput.h"
 #include "humanizer.h"
 
-// Adafruit Feather RP2040 USB Host pins
 #define USB_HOST_PWR_PIN 18
 
-// XInput report to send to PC
 static uint8_t current_report[20] = {0};
 static bool report_ready = false;
-
 static Humanizer humanizer;
 
 //--------------------------------------------------------------------
@@ -36,8 +34,14 @@ void core1_main(void)
 }
 
 //--------------------------------------------------------------------
-// XInput host callbacks - use correct tusb_xinput signatures
+// XInput host callbacks
 //--------------------------------------------------------------------
+usbh_class_driver_t const* usbh_app_driver_get_cb(uint8_t* driver_count)
+{
+    *driver_count = 1;
+    return &usbh_xinput_driver;
+}
+
 void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance,
                                     xinputh_interface_t const* xid_itf,
                                     uint16_t len)
@@ -80,32 +84,4 @@ void tuh_xinput_mount_cb(uint8_t dev_addr, uint8_t instance,
 void tuh_xinput_umount_cb(uint8_t dev_addr, uint8_t instance)
 {
     (void)dev_addr; (void)instance;
-    report_ready = false;
-    memset(current_report, 0, sizeof(current_report));
-}
-
-//--------------------------------------------------------------------
-// Main
-//--------------------------------------------------------------------
-int main(void)
-{
-    stdio_init_all();
-
-    humanizer_init(&humanizer);
-
-    tud_init(BOARD_TUD_RHPORT);
-
-    multicore_launch_core1(core1_main);
-
-    while (true) {
-        tud_task();
-
-        if (report_ready && tud_vendor_mounted()) {
-            tud_vendor_write(current_report, sizeof(current_report));
-            tud_vendor_flush();
-            report_ready = false;
-        }
-    }
-
-    return 0;
-}
+    report_ready =
