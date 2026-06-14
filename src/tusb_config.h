@@ -15,7 +15,7 @@ extern "C" {
 // Device - XInput output to PC
 #define CFG_TUD_ENABLED       1
 #define CFG_TUD_MAX_SPEED     OPT_MODE_FULL_SPEED
-#define CFG_TUD_ENDPOINT0_SIZE 64
+#define CFG_TUD_ENDPOINT0_SIZE 8
 
 // Disable all device classes except vendor
 #define CFG_TUD_HID           0
