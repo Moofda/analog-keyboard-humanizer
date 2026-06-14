@@ -84,4 +84,5 @@ void tuh_xinput_mount_cb(uint8_t dev_addr, uint8_t instance,
 void tuh_xinput_umount_cb(uint8_t dev_addr, uint8_t instance)
 {
     (void)dev_addr; (void)instance;
-    report_ready =
+report_ready = false;
+memset(current_report, 0, sizeof(current_report));
