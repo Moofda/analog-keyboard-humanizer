@@ -13,8 +13,6 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Install Dependencies
         run: sudo apt install -y cmake gcc-arm-none-eabi libnewlib-arm-none-eabi libstdc++-arm-none-eabi-newlib
@@ -23,7 +21,10 @@ jobs:
         run: git clone --branch 2.1.0 --recurse-submodules https://github.com/raspberrypi/pico-sdk.git
 
       - name: Get Pico PIO USB
-        run: git clone https://github.com/sekigon-gonnoc/Pico-PIO-USB.git
+        run: git clone https://github.com/sekigon-gonnoc/Pico-PIO-USB.git lib/Pico-PIO-USB
+
+      - name: Get tusb_xinput
+        run: git clone https://github.com/Ryzee119/tusb_xinput.git lib/tusb_xinput
 
       - name: Create Build Folder
         run: mkdir -p build output
@@ -32,7 +33,7 @@ jobs:
         run: |
           cd build
           cmake -DPICO_SDK_PATH=${{ github.workspace }}/pico-sdk \
-                -DPICO_PIO_USB_PATH=${{ github.workspace }}/Pico-PIO-USB \
+                -DPICO_PIO_USB_PATH=${{ github.workspace }}/lib/Pico-PIO-USB \
                 -DCMAKE_BUILD_TYPE=Release \
                 ..
           cmake --build . --parallel
