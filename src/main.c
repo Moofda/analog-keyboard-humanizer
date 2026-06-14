@@ -17,25 +17,17 @@ static uint8_t current_report[20] = {0};
 static bool report_ready = false;
 static Humanizer humanizer;
 
-//--------------------------------------------------------------------
-// Core 1 - USB Host
-//--------------------------------------------------------------------
 void core1_main(void)
 {
     gpio_init(USB_HOST_PWR_PIN);
     gpio_set_dir(USB_HOST_PWR_PIN, GPIO_OUT);
     gpio_put(USB_HOST_PWR_PIN, 1);
-
     tuh_init(BOARD_TUH_RHPORT);
-
     while (true) {
         tuh_task();
     }
 }
 
-//--------------------------------------------------------------------
-// XInput host callbacks
-//--------------------------------------------------------------------
 usbh_class_driver_t const* usbh_app_driver_get_cb(uint8_t* driver_count)
 {
     *driver_count = 1;
@@ -47,16 +39,12 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance,
                                     uint16_t len)
 {
     (void)dev_addr; (void)instance; (void)len;
-
     const xinput_gamepad_t* p = &xid_itf->pad;
-
     int16_t lx = p->sThumbLX;
     int16_t ly = p->sThumbLY;
     int16_t rx = p->sThumbRX;
     int16_t ry = p->sThumbRY;
-
     humanizer_process(&humanizer, &lx, &ly, &rx, &ry);
-
     current_report[0]  = 0x00;
     current_report[1]  = 0x14;
     current_report[2]  = (p->wButtons) & 0xFF;
@@ -71,7 +59,6 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance,
     current_report[11] = (rx >> 8) & 0xFF;
     current_report[12] = ry & 0xFF;
     current_report[13] = (ry >> 8) & 0xFF;
-
     report_ready = true;
 }
 
@@ -84,5 +71,22 @@ void tuh_xinput_mount_cb(uint8_t dev_addr, uint8_t instance,
 void tuh_xinput_umount_cb(uint8_t dev_addr, uint8_t instance)
 {
     (void)dev_addr; (void)instance;
-report_ready = false;
-memset(current_report, 0, sizeof(current_report));
+    report_ready = false;
+    memset(current_report, 0, sizeof(current_report));
+}
+
+int main(void)
+{
+    stdio_init_all();
+    humanizer_init(&humanizer);
+    tud_init(BOARD_TUD_RHPORT);
+    multicore_launch_core1(core1_main);
+    while (true) {
+        tud_task();
+        if (report_ready) {
+            tud_xinput_send_report(current_report, sizeof(current_report));
+            report_ready = false;
+        }
+    }
+    return 0;
+}
