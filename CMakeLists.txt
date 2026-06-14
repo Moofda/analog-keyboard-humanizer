@@ -16,6 +16,9 @@ if(NOT PICO_PIO_USB_PATH)
     set(PICO_PIO_USB_PATH ${CMAKE_CURRENT_LIST_DIR}/lib/Pico-PIO-USB)
 endif()
 
+# Tell tusb_xinput where TinyUSB lives
+set(TINYUSB_PATH ${PICO_SDK_PATH}/lib/tinyusb)
+
 # Add tusb_xinput submodule
 add_subdirectory(${CMAKE_CURRENT_LIST_DIR}/lib/tusb_xinput xinput_host)
 
