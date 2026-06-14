@@ -29,6 +29,7 @@ add_executable(analog_keyboard_humanizer
     src/main.c
     src/usb_descriptors.c
     src/humanizer.c
+    src/tud_xinput.c
 )
 
 target_include_directories(analog_keyboard_humanizer PRIVATE
@@ -53,7 +54,6 @@ target_link_libraries(analog_keyboard_humanizer PRIVATE
     xinput_host
 )
 
-# Create alias so tusb_xinput can find tinyusb
 add_library(tinyusb ALIAS tinyusb_host)
 
 pico_add_extra_outputs(analog_keyboard_humanizer)
