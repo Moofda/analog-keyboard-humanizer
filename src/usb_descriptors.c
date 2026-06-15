@@ -1,17 +1,17 @@
 #include "tusb.h"
 #include <string.h>
 
-// Lean XInput Device Descriptor
+// Device Descriptor aligned with your exact tusb_config.h
 static const uint8_t desc_device[] = {
     0x12,       // bLength
     0x01,       // bDescriptorType (Device)
     0x00, 0x02, // bcdUSB 2.00
-    0xFF,       // bDeviceClass (Vendor Specific)
-    0xFF,       // bDeviceSubClass
-    0xFF,       // bDeviceProtocol
+    0x00,       // bDeviceClass (0x00 means let interfaces define their own class)
+    0x00,       // bDeviceSubClass
+    0x00,       // bDeviceProtocol
     0x08,       // bMaxPacketSize0 (Strictly 8 bytes for Xbox 360)
     0x5E, 0x04, // idVendor 0x045E (Microsoft)
-    0x91, 0x02, // idProduct 0x0291 (Fresh PID to reset Windows driver registry)
+    0x92, 0x02, // idProduct 0x0292 (Fresh PID to force Windows to read a clean registry node)
     0x14, 0x01, // bcdDevice 0x0114
     0x01,       // iManufacturer
     0x02,       // iProduct
@@ -24,20 +24,22 @@ uint8_t const * tud_descriptor_device_cb(void)
     return desc_device;
 }
 
-// Clean Configuration Descriptor matching strict Gamepad endpoints
+// Configuration Descriptor setting up 2 Interfaces: 1 for Vendor, 1 for XInput Gamepad
 static const uint8_t desc_configuration[] = {
-    // Configuration Descriptor
-    0x09, 0x02, 0x20, 0x00, 0x01, 0x01, 0x00, 0xA0, 0xFA,
+    // Configuration Descriptor (Total length: 9 + 32 + 32 = 73 bytes -> 0x49)
+    0x09, 0x02, 0x49, 0x00, 0x02, 0x01, 0x00, 0xA0, 0xFA,
 
-    // Interface 0: Gamepad Controls Only
-    0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0x5D, 0x01, 0x00,
+    // Interface 0: Generic Vendor (Keeps your tusb_config.h CFG_TUD_VENDOR happy)
+    0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0x00, 0x00, 0x00,
+    0x07, 0x05, 0x83, 0x03, 0x40, 0x00, 0x01, // Bulk/Interrupt IN Endpoint 3
+    0x07, 0x05, 0x04, 0x03, 0x40, 0x00, 0x01, // Bulk/Interrupt OUT Endpoint 4
+
+    // Interface 1: Strict XInput Gamepad Controls (What Windows binds the driver to!)
+    0x09, 0x04, 0x01, 0x00, 0x02, 0xFF, 0x5D, 0x01, 0x00,
     0x11, 0x21, 0x00, 0x01, 0x01, 0x25, 0x81, 0x14,
     0x00, 0x00, 0x00, 0x00, 0x13, 0x02, 0x08, 0x00, 0x00,
-    
-    // Endpoint 1: IN (Data to PC)
-    0x07, 0x05, 0x81, 0x03, 0x20, 0x00, 0x04,
-    // Endpoint 2: OUT (Rumble commands from PC)
-    0x07, 0x05, 0x02, 0x03, 0x20, 0x00, 0x08
+    0x07, 0x05, 0x81, 0x03, 0x20, 0x00, 0x04, // Endpoint 1: IN
+    0x07, 0x05, 0x02, 0x03, 0x20, 0x00, 0x08  // Endpoint 2: OUT
 };
 
 uint8_t const * tud_descriptor_configuration_cb(uint8_t index)
@@ -46,7 +48,7 @@ uint8_t const * tud_descriptor_configuration_cb(uint8_t index)
     return desc_configuration;
 }
 
-// Strings
+// String Descriptors
 static const char* string_desc_arr[] = {
     (const char[]) { 0x09, 0x04 },
     "Microsoft Corporation",
