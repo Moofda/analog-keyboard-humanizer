@@ -3,11 +3,7 @@
 #include "tud_xinput.h"
 #include <string.h>
 
-#define ENDPOINT_SIZE 32  
-
-// ====================================================================
-// 1. CLEAN SINGLE INTERFACE XINPUT DESCRIPTORS
-// ====================================================================
+#define ENDPOINT_SIZE 20  
 
 static const uint8_t desc_device[] = {
     0x12,       // bLength
@@ -18,7 +14,7 @@ static const uint8_t desc_device[] = {
     0xFF,       // bDeviceProtocol
     0x08,       // bMaxPacketSize0 (Strictly 8 bytes)
     0x5E, 0x04, // idVendor 0x045E (Microsoft)
-    0x96, 0x02, // idProduct 0x0296 (Fresh PID to completely force a clean Windows registry reset)
+    0x99, 0x02, // idProduct 0x0299 (Fresh PID to force a clean registry sweep)
     0x14, 0x01, // bcdDevice 0x0114
     0x01,       // iManufacturer
     0x02,       // iProduct
@@ -32,10 +28,10 @@ uint8_t const * tud_descriptor_device_cb(void)
 }
 
 static const uint8_t desc_configuration[] = {
-    // Configuration Descriptor
+    // Configuration Header
     0x09, 0x02, 0x20, 0x00, 0x01, 0x01, 0x00, 0xA0, 0xFA,
 
-    // Interface 0: Pristine Gamepad Controls Only
+    // Interface 0: XInput Gamepad Controls Only
     0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0x5D, 0x01, 0x00,
     0x11, 0x21, 0x00, 0x01, 0x01, 0x25, 0x81, 0x14,
     0x00, 0x00, 0x00, 0x00, 0x13, 0x02, 0x08, 0x00, 0x00,
@@ -81,10 +77,6 @@ uint16_t const* tud_descriptor_string_cb(uint8_t index, uint16_t langid)
     _desc_str[0] = (uint16_t)((TUSB_DESC_STRING << 8) | (2*chr_count + 2));
     return _desc_str;
 }
-
-// ====================================================================
-// 2. CLASS DRIVER HANDLING LOGIC
-// ====================================================================
 
 static uint8_t endpoint_in  = 0xFF;
 static uint8_t endpoint_out = 0xFF;
