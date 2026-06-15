@@ -12,12 +12,12 @@ extern "C" {
 #define CFG_TUSB_OS           OPT_OS_PICO
 #define CFG_TUSB_DEBUG        0
 
-// Device - XInput output to PC
+// Device Configuration
 #define CFG_TUD_ENABLED       1
 #define CFG_TUD_MAX_SPEED     OPT_MODE_FULL_SPEED
 #define CFG_TUD_ENDPOINT0_SIZE 8
 
-// Disable all device classes except vendor
+// Disable all built-in classes so our custom XInput driver can handle the layout safely
 #define CFG_TUD_HID           0
 #define CFG_TUD_CDC           0
 #define CFG_TUD_MSC           0
@@ -25,11 +25,9 @@ extern "C" {
 #define CFG_TUD_AUDIO         0
 #define CFG_TUD_VIDEO         0
 #define CFG_TUD_DFU_RUNTIME   0
-#define CFG_TUD_VENDOR        1
-#define CFG_TUD_VENDOR_RX_BUFSIZE 64
-#define CFG_TUD_VENDOR_TX_BUFSIZE 64
+#define CFG_TUD_VENDOR        0 // Turned OFF to stop Code 43 collisions
 
-// Host - XInput keyboard
+// Host Configuration (Keep your keyboard input settings exactly as they were)
 #define CFG_TUH_ENABLED       1
 #define CFG_TUH_RPI_PIO_USB   1
 #define CFG_TUH_MAX_SPEED     OPT_MODE_DEFAULT_SPEED
