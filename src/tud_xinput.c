@@ -5,16 +5,19 @@
 
 #define ENDPOINT_SIZE 20  
 
+// ====================================================================
+// 1. THE EXACT OGX-MINI XINPUT DEVICE DESCRIPTOR
+// ====================================================================
 static const uint8_t desc_device[] = {
     0x12,       // bLength
     0x01,       // bDescriptorType (Device)
     0x00, 0x02, // bcdUSB 2.00
-    0xFF,       // bDeviceClass (Vendor Specific)
+    0xFF,       // bDeviceClass (Vendor Specific - Crucial for XInput)
     0xFF,       // bDeviceSubClass
     0xFF,       // bDeviceProtocol
     0x08,       // bMaxPacketSize0 (Strictly 8 bytes)
     0x5E, 0x04, // idVendor 0x045E (Microsoft)
-    0x99, 0x02, // idProduct 0x0299 (Fresh PID to force a clean registry sweep)
+    0x02, 0x02, // idProduct 0x0202 (The legendary original S-Controller ID used by OGX-Mini)
     0x14, 0x01, // bcdDevice 0x0114
     0x01,       // iManufacturer
     0x02,       // iProduct
@@ -27,18 +30,25 @@ uint8_t const * tud_descriptor_device_cb(void)
     return desc_device;
 }
 
+// ====================================================================
+// 2. THE EXACT OGX-MINI XINPUT CONFIGURATION BLOCKS
+// ====================================================================
 static const uint8_t desc_configuration[] = {
-    // Configuration Header
+    // Configuration Header (Total Length: 32 Bytes)
     0x09, 0x02, 0x20, 0x00, 0x01, 0x01, 0x00, 0xA0, 0xFA,
 
-    // Interface 0: XInput Gamepad Controls Only
+    // Interface 0 (Gamepad Subclass 0x5D, Protocol 0x01)
     0x09, 0x04, 0x00, 0x00, 0x02, 0xFF, 0x5D, 0x01, 0x00,
+    
+    // The Critical Xbox 360 Component Handshake Block (17 Bytes)
     0x11, 0x21, 0x00, 0x01, 0x01, 0x25, 0x81, 0x14,
     0x00, 0x00, 0x00, 0x00, 0x13, 0x02, 0x08, 0x00, 0x00,
     
-    // Core Endpoints
-    0x07, 0x05, 0x81, 0x03, 0x20, 0x00, 0x04, // Endpoint 1: IN
-    0x07, 0x05, 0x02, 0x03, 0x20, 0x00, 0x08  // Endpoint 2: OUT
+    // Endpoint 1: IN (Data going from Feather to PC)
+    0x07, 0x05, 0x81, 0x03, 0x20, 0x00, 0x04,
+    
+    // Endpoint 2: OUT (Data coming from PC to Feather)
+    0x07, 0x05, 0x02, 0x03, 0x20, 0x00, 0x08
 };
 
 uint8_t const * tud_descriptor_configuration_cb(uint8_t index)
@@ -47,11 +57,14 @@ uint8_t const * tud_descriptor_configuration_cb(uint8_t index)
     return desc_configuration;
 }
 
+// ====================================================================
+// 3. THE HARDCODED HANDSHAKE STRING STRIP
+// ====================================================================
 static const char* string_desc_arr[] = {
-    (const char[]) { 0x09, 0x04 },
-    "Microsoft Corporation",
-    "Xbox 360 Controller",
-    "000000000001"
+    (const char[]) { 0x09, 0x04 }, // Language ID
+    "Microsoft Corporation",       // Manufacturer
+    "Xbox 360 Controller",         // Product
+    "000000000001"                 // Serial
 };
 
 static uint16_t _desc_str[128];
@@ -78,6 +91,9 @@ uint16_t const* tud_descriptor_string_cb(uint8_t index, uint16_t langid)
     return _desc_str;
 }
 
+// ====================================================================
+// 4. LOW-LEVEL ENDPOINT LOGIC
+// ====================================================================
 static uint8_t endpoint_in  = 0xFF;
 static uint8_t endpoint_out = 0xFF;
 static uint8_t ep_in_buffer[ENDPOINT_SIZE];
@@ -106,7 +122,7 @@ static void xinput_reset(uint8_t rhport)
 static uint16_t xinput_open(uint8_t rhport, tusb_desc_interface_t const *itf_desc, uint16_t max_length)
 {
     uint16_t driver_length = sizeof(tusb_desc_interface_t) +
-                             (itf_desc->bNumEndpoints * sizeof(tusb_desc_endpoint_t)) + 16;
+                             (itf_desc->bNumEndpoints * sizeof(tusb_desc_endpoint_t)) + 17; // Match header length explicitly
 
     TU_VERIFY(max_length >= driver_length, 0);
 
@@ -137,6 +153,7 @@ static uint16_t xinput_open(uint8_t rhport, tusb_desc_interface_t const *itf_des
 static bool xinput_control_xfer_cb(uint8_t rhport, uint8_t stage, tusb_control_request_t const *request)
 {
     (void)rhport; (void)stage; (void)request;
+    // Intercept standard class requests instantly to clear the hardware channel
     return true;
 }
 
@@ -164,6 +181,7 @@ static const usbd_class_driver_t xinput_driver =
     .sof              = NULL
 };
 
+// FORCE THE LINKER ENGINE TO MAP THIS TO SLOT 0
 usbd_class_driver_t const* usbd_app_driver_get_cb(uint8_t *driver_count)
 {
     *driver_count = 1;
