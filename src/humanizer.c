@@ -1,125 +1,107 @@
 #include "humanizer.h"
+#include "pico/stdlib.h"
+#include <stdlib.h>
+#include <math.h>
 
-// Q16.16 fixed point math - pure integer, no library needed
-static inline int32_t fp_mul(int32_t a, int32_t b)
-{
-    return (int32_t)(((int64_t)a * b) >> 16);
+// Fast, low-overhead PRNG to keep execution speeds blazing fast
+static uint32_t local_prng(uint32_t* state) {
+    uint32_t x = *state;
+    x ^= x << 13;
+    x ^= x >> 17;
+    x ^= x << 5;
+    return *state = x;
 }
 
-static inline int32_t fp_div(int32_t a, int32_t b)
-{
-    if (b == 0) return 0;
-    return (int32_t)(((int64_t)a << 16) / b);
+void humanizer_init(Humanizer* h) {
+    h->rng_state = 0x8A5E4D3C; 
+    h->wander_angle_l = 0.0f;
+    h->wander_angle_r = 0.0f;
+    h->drift_lx = 0;
+    h->drift_ly = 0;
+    h->drift_rx = 0;
+    h->drift_ry = 0;
+    h->last_drift_time = 0;
 }
 
-static inline int32_t fp_from_int(int16_t a)
-{
-    return (int32_t)((int32_t)a << 16);
-}
-
-static inline int16_t fp_to_int(int32_t a)
-{
-    return (int16_t)(a >> 16);
-}
-
-static int32_t fp_next_rand(Humanizer* h)
-{
-    h->rng_state ^= h->rng_state << 13;
-    h->rng_state ^= h->rng_state >> 17;
-    h->rng_state ^= h->rng_state << 5;
-    int16_t signed_val = (int16_t)(h->rng_state % 1000);
-    return fp_div(fp_from_int(signed_val), fp_from_int(1000));
-}
-
-static const int32_t FIX_1    = 0x00010000;
-static const int32_t FIX_NEG1 = 0xFFFF0000;
-static const int32_t FIX_095  = 0x0000F333;
-
-void humanizer_init(Humanizer* h)
-{
-    // Default settings
-    h->settings.magnitude_cap        = 0x0000D999; // 0.85
-    h->settings.drift_strength       = 0x00001470; // 0.08
-    h->settings.drift_max            = 0x00004000; // 0.25
-    h->settings.drift_retarget_frames = 400;
-    h->settings.idle_threshold       = 0x00001999; // 0.10
-    h->settings.enabled              = true;
-
-    h->drift_lx = 0; h->drift_ly = 0;
-    h->drift_rx = 0; h->drift_ry = 0;
-    h->target_lx = 0; h->target_ly = 0;
-    h->target_rx = 0; h->target_ry = 0;
-    h->retarget_counter_l = 0;
-    h->retarget_counter_r = 0;
-    h->was_idle_l = true;
-    h->was_idle_r = true;
-    h->rng_state = 12345;
-}
-
-static void process_stick(
-    Humanizer* h,
-    int16_t* x, int16_t* y,
-    int32_t* drift_x, int32_t* drift_y,
-    int32_t* target_x, int32_t* target_y,
-    uint32_t* retarget_counter,
-    bool* was_idle)
-{
-    int32_t nx = fp_div(fp_from_int(*x), fp_from_int(32767));
-    int32_t ny = fp_div(fp_from_int(*y), fp_from_int(32767));
-
-    int32_t mag_sq = fp_mul(nx, nx) + fp_mul(ny, ny);
-    int32_t idle_sq = fp_mul(h->settings.idle_threshold,
-                             h->settings.idle_threshold);
-    bool is_idle = (mag_sq < idle_sq);
-
-    if (is_idle)
-    {
-        (*retarget_counter)++;
-        if (*retarget_counter >= h->settings.drift_retarget_frames)
-        {
-            *retarget_counter = 0;
-            *target_x = fp_mul(fp_next_rand(h), h->settings.drift_max);
-            *target_y = fp_mul(fp_next_rand(h), h->settings.drift_max);
+void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int16_t* ry, uint16_t angle_spread, uint16_t deflection_scale, uint16_t deadzone) {
+    uint32_t now = to_ms_since_boot(get_absolute_time());
+    
+    // ----------------------------------------------------------------
+    // 1. IMPERFECT CENTERING SPRING (DRIFT MODULE)
+    // ----------------------------------------------------------------
+    if (deadzone > 0) {
+        if (now - h->last_drift_time > 200) { // Evolve spring settling point every 200ms
+            h->last_drift_time = now;
+            int32_t max_drift = deadzone * 10; 
+            h->drift_lx = (int16_t)((local_prng(&h->rng_state) % (max_drift * 2)) - max_drift);
+            h->drift_ly = (int16_t)((local_prng(&h->rng_state) % (max_drift * 2)) - max_drift);
+            h->drift_rx = (int16_t)((local_prng(&h->rng_state) % (max_drift * 2)) - max_drift);
+            h->drift_ry = (int16_t)((local_prng(&h->rng_state) % (max_drift * 2)) - max_drift);
         }
-        *drift_x = *drift_x + fp_mul(*target_x - *drift_x,
-                                     h->settings.drift_strength);
-        *drift_y = *drift_y + fp_mul(*target_y - *drift_y,
-                                     h->settings.drift_strength);
-        nx = nx + *drift_x;
-        ny = ny + *drift_y;
-        if (nx > FIX_1)    nx = FIX_1;
-        if (nx < FIX_NEG1) nx = FIX_NEG1;
-        if (ny > FIX_1)    ny = FIX_1;
-        if (ny < FIX_NEG1) ny = FIX_NEG1;
-    }
-    else
-    {
-        *drift_x = fp_mul(*drift_x, FIX_095);
-        *drift_y = fp_mul(*drift_y, FIX_095);
-        *retarget_counter = 0;
+        
+        if (*lx == 0 && *ly == 0) { *lx = h->drift_lx; *ly = h->drift_ly; }
+        if (*rx == 0 && *ry == 0) { *rx = h->drift_rx; *ry = h->drift_ry; }
     }
 
-    *was_idle = is_idle;
+    // ----------------------------------------------------------------
+    // 2. POLAR COORDINATE DYNAMIC WANDERING (LEFT STICK)
+    // ----------------------------------------------------------------
+    if (angle_spread > 0 && (*lx != 0 || *ly != 0)) {
+        // Calculate the vector magnitude (r) and target angle (theta)
+        float fx = (float)*lx;
+        float fy = (float)*ly;
+        float r = sqrtf(fx * fx + fy * fy);
+        float theta = atan2f(fy, fx);
 
-    *x = fp_to_int(fp_mul(nx, fp_from_int(32767)));
-    *y = fp_to_int(fp_mul(ny, fp_from_int(32767)));
-}
+        // Map the Slider 1 value (0-100) into an absolute maximum error cone in radians
+        // Max value of 100 yields ~0.25 radians (approx ±15 degrees maximum warp area)
+        float max_cone = (angle_spread / 100.0f) * 0.25f;
 
-void humanizer_process(Humanizer* h,
-    int16_t* lx, int16_t* ly,
-    int16_t* rx, int16_t* ry)
-{
-    if (!h->settings.enabled) return;
+        // Apply Slider 2 (Deflection Scaling): Shrink the error cone as the stick pushes out.
+        // Pinned to the outer gate rim = maximum physical control stability, error drops.
+        float current_max_cone = max_cone * (1.0f - (r / 32768.0f) * (deflection_scale / 100.0f) * 0.75f);
+        if (current_max_cone < 0.0f) current_max_cone = 0.0f;
 
-    process_stick(h, lx, ly,
-        &h->drift_lx, &h->drift_ly,
-        &h->target_lx, &h->target_ly,
-        &h->retarget_counter_l,
-        &h->was_idle_l);
+        // BOUNDED RANDOM WALK (Slow & Smooth Filter):
+        // Calculate a micro-fractional push between -0.02 and +0.02 radians
+        float step = (((float)(local_prng(&h->rng_state) % 1000) / 1000.0f) * 0.04f) - 0.02f;
+        
+        // Add step to the persistent memory to create an organic wave over time
+        h->wander_angle_l += step;
 
-    process_stick(h, rx, ry,
-        &h->drift_rx, &h->drift_ry,
-        &h->target_rx, &h->target_ry,
-        &h->retarget_counter_r,
-        &h->was_idle_r);
+        // Enforce the boundaries of the dynamically scaled error cone
+        if (h->wander_angle_l > current_max_cone)  h->wander_angle_l = current_max_cone;
+        if (h->wander_angle_l < -current_max_cone) h->wander_angle_l = -current_max_cone;
+
+        // Translate Polar data smoothly right back into standard Cartesian coordinates
+        *lx = (int16_t)(r * cosf(theta + h->wander_angle_l));
+        *ly = (int16_t)(r * sinf(theta + h->wander_angle_l));
+    } else {
+        h->wander_angle_l = 0.0f; // Snaps baseline clean if inputs drop
+    }
+
+    // ----------------------------------------------------------------
+    // 3. POLAR COORDINATE DYNAMIC WANDERING (RIGHT STICK)
+    // ----------------------------------------------------------------
+    if (angle_spread > 0 && (*rx != 0 || *ry != 0)) {
+        float fx = (float)*rx;
+        float fy = (float)*ry;
+        float r = sqrtf(fx * fx + fy * fy);
+        float theta = atan2f(fy, fx);
+
+        float max_cone = (angle_spread / 100.0f) * 0.25f;
+        float current_max_cone = max_cone * (1.0f - (r / 32768.0f) * (deflection_scale / 100.0f) * 0.75f);
+        if (current_max_cone < 0.0f) current_max_cone = 0.0f;
+
+        float step = (((float)(local_prng(&h->rng_state) % 1000) / 1000.0f) * 0.04f) - 0.02f;
+        h->wander_angle_r += step;
+
+        if (h->wander_angle_r > current_max_cone)  h->wander_angle_r = current_max_cone;
+        if (h->wander_angle_r < -current_max_cone) h->wander_angle_r = -current_max_cone;
+
+        *rx = (int16_t)(r * cosf(theta + h->wander_angle_r));
+        *ry = (int16_t)(r * sinf(theta + h->wander_angle_r));
+    } else {
+        h->wander_angle_r = 0.0f;
+    }
 }
