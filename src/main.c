@@ -6,7 +6,7 @@
 #include "pico/multicore.h"
 #include "hardware/gpio.h"
 #include "hardware/clocks.h"
-#include "hardware/watchdog.h" // Required for triggering software resets
+#include "hardware/watchdog.h" 
 #include "hardware/structs/watchdog.h"
 
 #include "pio_usb.h"         
@@ -15,14 +15,18 @@
 #include "tud_xinput.h"
 #include "humanizer.h"
 
+// Forward declarations to link custom functions inside tud_xinput.c
+void tud_set_config_mode(bool enable);
+bool tud_in_config_mode(void);
+void tud_config_handle_serial(void);
+
 #define USB_HOST_PWR_PIN 18
-#define CONFIG_MAGIC_NUM 0x1A2B3C4D // Unique flag key to signal a config boot
+#define CONFIG_MAGIC_NUM 0x1A2B3C4D 
 
 static uint8_t current_report[20] = {0};
 static volatile bool report_ready = false; 
 static Humanizer humanizer;
 
-// Tracking state for the 3-second button combo hold
 static uint32_t combo_start_time = 0;
 static bool combo_pressed_last_frame = false;
 
@@ -73,19 +77,14 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_i
     (void)dev_addr; (void)instance; (void)len;
     const xinput_gamepad_t* p = &xid_itf->pad;
     
-    // ----------------------------------------------------------------
-    // COMBO DETECTOR: Start (0x0010) + LB (0x0100) + RB (0x0200) = 0x0310
-    // ----------------------------------------------------------------
+    // Combo Detector: Start (0x0010) + LB (0x0100) + RB (0x0200) = 0x0310
     if ((p->wButtons & 0x0310) == 0x0310) {
         uint32_t now = to_ms_since_boot(get_absolute_time());
         if (!combo_pressed_last_frame) {
             combo_start_time = now;
             combo_pressed_last_frame = true;
         } else if (now - combo_start_time >= 3000) {
-            // Combo has been held continuously for 3 seconds!
-            // Write the magic key flag into a safe hardware register retention slot
             watchdog_hw->scratch[0] = CONFIG_MAGIC_NUM;
-            // Force an instant hard reset of the board (reboots in ~10ms)
             watchdog_reboot(0, 0, 10);
         }
     } else {
@@ -127,12 +126,8 @@ int main(void)
     stdio_init_all();
     humanizer_init(&humanizer);
     
-    // Check if we are waking up from a requested web app configuration call
     if (watchdog_hw->scratch[0] == CONFIG_MAGIC_NUM) {
-        // Clear the register state flag so it doesn't get locked permanently
         watchdog_hw->scratch[0] = 0;
-        
-        // Signal our descriptor handler engine to load the USB Serial mode layout
         tud_set_config_mode(true);
     } else {
         tud_set_config_mode(false);
@@ -144,7 +139,6 @@ int main(void)
     while (true) {
         tud_task();
         
-        // If we are in configuration mode, handle incoming web serial commands
         if (tud_in_config_mode()) {
             tud_config_handle_serial();
         } else if (report_ready) {
