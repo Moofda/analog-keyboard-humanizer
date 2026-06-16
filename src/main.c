@@ -84,8 +84,12 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_i
             combo_start_time = now;
             combo_pressed_last_frame = true;
         } else if (now - combo_start_time >= 3000) {
+            // Lock the configuration mode key flag into persistent scratchpad memory
             watchdog_hw->scratch[0] = CONFIG_MAGIC_NUM;
-            watchdog_reboot(0, 0, 10);
+            
+            // FORCE AN INSTANT HARDWARE RESET: Trip the watchdog immediately in 1ms
+            watchdog_enable(1, false);
+            while (1); 
         }
     } else {
         combo_pressed_last_frame = false;
