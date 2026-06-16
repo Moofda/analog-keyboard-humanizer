@@ -27,11 +27,12 @@ static uint8_t current_report[20] = {0};
 static volatile bool report_ready = false; 
 static Humanizer humanizer;
 
+// Caching variables for the continuous state-machine background scanner
+static volatile uint16_t latest_buttons = 0;
 static uint32_t combo_start_time = 0;
-static bool combo_pressed_last_frame = false;
 
 // ====================================================================
-// CORE 1: EXCLUSIVE USB HOST CONTROLLER
+// CORE 1: EXCLUSIVE USB HOST CONTROLLER & STATE SCANNER
 // ====================================================================
 void core1_main(void)
 {
@@ -47,6 +48,24 @@ void core1_main(void)
     
     while (true) {
         tuh_task();
+        
+        // CONTINUOUS BACKGROUND STATE SCANNER (Matches OGX-Mini's design)
+        // Keeps ticking even if the USB cable goes completely quiet during a stationary hold
+        uint32_t now = to_ms_since_boot(get_absolute_time());
+        
+        // COMBO MASK: Start (0x0010) + LB (0x0100) + RB (0x0200) = 0x0310
+        if ((latest_buttons & 0x0310) == 0x0310) {
+            if (combo_start_time == 0) {
+                combo_start_time = now; // Set the baseline anchor time
+            } else if (now - combo_start_time >= 3000) {
+                // Pinched successfully for 3 absolute seconds!
+                watchdog_hw->scratch[0] = CONFIG_MAGIC_NUM;
+                watchdog_reboot(0, 0, 10);
+                while(1);
+            }
+        } else {
+            combo_start_time = 0; // Clear immediately if any button slips
+        }
     }
 }
 
@@ -69,6 +88,8 @@ void tuh_xinput_umount_cb(uint8_t dev_addr, uint8_t instance)
 {
     (void)dev_addr; (void)instance;
     report_ready = false;
+    latest_buttons = 0; // Reset cache if the keyboard is disconnected
+    combo_start_time = 0;
     memset(current_report, 0, sizeof(current_report));
 }
 
@@ -77,23 +98,8 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_i
     (void)dev_addr; (void)instance; (void)len;
     const xinput_gamepad_t* p = &xid_itf->pad;
     
-    // Combo Detector: Start (0x0010) + LB (0x0100) + RB (0x0200) = 0x0310
-    if ((p->wButtons & 0x0310) == 0x0310) {
-        uint32_t now = to_ms_since_boot(get_absolute_time());
-        if (!combo_pressed_last_frame) {
-            combo_start_time = now;
-            combo_pressed_last_frame = true;
-        } else if (now - combo_start_time >= 3000) {
-            // Lock the configuration mode key flag into persistent scratchpad memory
-            watchdog_hw->scratch[0] = CONFIG_MAGIC_NUM;
-            
-            // FORCE AN INSTANT HARDWARE RESET: Trip the watchdog immediately in 1ms
-            watchdog_enable(1, false);
-            while (1); 
-        }
-    } else {
-        combo_pressed_last_frame = false;
-    }
+    // Cache the absolute latest raw button data instantly for Core 1's scanner thread
+    latest_buttons = p->wButtons;
 
     int16_t lx = p->sThumbLX;
     int16_t ly = p->sThumbLY;
