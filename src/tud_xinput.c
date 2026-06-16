@@ -2,7 +2,7 @@
 #include "device/usbd_pvt.h"
 #include "tud_xinput.h"
 #include "hardware/watchdog.h"
-#include "pico/time.h" // Required for hardware delay functions
+#include "pico/time.h" 
 #include <string.h>
 
 #define ENDPOINT_SIZE 20  
@@ -102,9 +102,11 @@ void tud_config_handle_serial(void) {
             tud_cdc_write_str("Rebooting to Gamepad Mode...\r\n");
             tud_cdc_write_flush();
             
-            busy_wait_us_32(50000); // Fixed typo here
+            busy_wait_us_32(50000); 
             
-            watchdog_reboot(0, 0, 10);
+            // Force hardware watchdog to reboot straight back into controller mode
+            watchdog_enable(1, false);
+            while (1);
         }
     }
 }
