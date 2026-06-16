@@ -31,9 +31,9 @@ bool tud_in_config_mode(void);
 
 typedef struct {
     uint32_t magic;           
-    uint16_t jitter_level;     // Maps to Slider 1: Global Angle Spread
-    uint16_t smoothing_rate;   // Maps to Slider 2: Deflection Scaling
-    uint16_t deadzone_mod;     // Maps to Slider 3: Centering Stick-Drift
+    uint16_t jitter_level;    
+    uint16_t smoothing_rate;  
+    uint16_t deadzone_mod;    
 } humanizer_config_t;
 
 static humanizer_config_t active_config;
@@ -46,6 +46,9 @@ static Humanizer humanizer;
 static volatile uint16_t latest_buttons = 0;
 static uint32_t combo_start_time = 0;
 
+// ====================================================================
+// STORAGE ENGINES: READ AND WRITE FLASH WITH LOCKOUT PROTECTION
+// ====================================================================
 void load_settings_from_flash(void) {
     humanizer_config_t *flash_profile = (humanizer_config_t *) flash_target_contents;
     
@@ -53,7 +56,7 @@ void load_settings_from_flash(void) {
         memcpy(&active_config, flash_profile, sizeof(humanizer_config_t));
     } else {
         active_config.magic = FLASH_MAGIC_KEY;
-        active_config.jitter_level = 0;    // Starts beautifully clean at 0
+        active_config.jitter_level = 0;    
         active_config.smoothing_rate = 0; 
         active_config.deadzone_mod = 0;    
     }
@@ -62,12 +65,21 @@ void load_settings_from_flash(void) {
 void save_settings_to_flash(humanizer_config_t *new_config) {
     new_config->magic = FLASH_MAGIC_KEY;
     
+    // CRITICAL FIX: Order Core 1 to park in safe RAM storage before erasing flash
+    multicore_lockout_start_blocking();
+    
     uint32_t saved_interrupts = save_and_disable_interrupts();
     flash_range_erase(FLASH_TARGET_OFFSET, FLASH_SECTOR_SIZE);
     flash_range_program(FLASH_TARGET_OFFSET, (const uint8_t *)new_config, sizeof(humanizer_config_t));
     restore_interrupts(saved_interrupts);
+    
+    // CRITICAL FIX: Release Core 1 to resume normal operations
+    multicore_lockout_end_blocking();
 }
 
+// ====================================================================
+// WEB CONFIGURATOR: TEXT PARSER ENGINE
+// ====================================================================
 void process_web_serial_commands(void) {
     if (tud_cdc_available()) {
         char buffer[64];
@@ -105,8 +117,14 @@ void process_web_serial_commands(void) {
     }
 }
 
+// ====================================================================
+// CORE 1: EXCLUSIVE USB HOST CONTROLLER & STATE SCANNER
+// ====================================================================
 void core1_main(void)
 {
+    // Initialize the lockout listener on Core 1 so it can respond to pause requests
+    multicore_lockout_victim_init();
+
     gpio_init(USB_HOST_PWR_PIN);
     gpio_set_dir(USB_HOST_PWR_PIN, GPIO_OUT);
     gpio_put(USB_HOST_PWR_PIN, 1);
@@ -168,7 +186,6 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_i
     int16_t rx = p->sThumbRX;
     int16_t ry = p->sThumbRY;
     
-    // Connect variables to updated vector loop sequence 
     humanizer_process(&humanizer, &lx, &ly, &rx, &ry, 
                       active_config.jitter_level, 
                       active_config.smoothing_rate, 
