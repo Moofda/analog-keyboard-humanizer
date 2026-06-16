@@ -31,9 +31,9 @@ bool tud_in_config_mode(void);
 
 typedef struct {
     uint32_t magic;           
-    uint16_t jitter_level;    
-    uint16_t smoothing_rate;  
-    uint16_t deadzone_mod;    
+    uint16_t jitter_level;     // Maps to Slider 1: Global Angle Spread
+    uint16_t smoothing_rate;   // Maps to Slider 2: Deflection Scaling
+    uint16_t deadzone_mod;     // Maps to Slider 3: Centering Stick-Drift
 } humanizer_config_t;
 
 static humanizer_config_t active_config;
@@ -46,9 +46,6 @@ static Humanizer humanizer;
 static volatile uint16_t latest_buttons = 0;
 static uint32_t combo_start_time = 0;
 
-// ====================================================================
-// STORAGE ENGINES: READ AND WRITE FLASH
-// ====================================================================
 void load_settings_from_flash(void) {
     humanizer_config_t *flash_profile = (humanizer_config_t *) flash_target_contents;
     
@@ -56,9 +53,9 @@ void load_settings_from_flash(void) {
         memcpy(&active_config, flash_profile, sizeof(humanizer_config_t));
     } else {
         active_config.magic = FLASH_MAGIC_KEY;
-        active_config.jitter_level = 15;   
-        active_config.smoothing_rate = 20; 
-        active_config.deadzone_mod = 5;    
+        active_config.jitter_level = 0;    // Starts beautifully clean at 0
+        active_config.smoothing_rate = 0; 
+        active_config.deadzone_mod = 0;    
     }
 }
 
@@ -71,29 +68,23 @@ void save_settings_to_flash(humanizer_config_t *new_config) {
     restore_interrupts(saved_interrupts);
 }
 
-// ====================================================================
-// WEB CONFIGURATOR: TEXT PARSER ENGINE
-// ====================================================================
 void process_web_serial_commands(void) {
     if (tud_cdc_available()) {
         char buffer[64];
         uint32_t count = tud_cdc_read(buffer, sizeof(buffer) - 1);
         buffer[count] = '\0'; 
 
-        // Match the web slider signature: "SET:jitter,smoothing,deadzone"
         if (strncmp(buffer, "SET:", 4) == 0) {
             humanizer_config_t new_cfg;
             int j, s, d;
             
-            // Extract integers directly from the text buffer string
             if (sscanf(buffer, "SET:%d,%d,%d", &j, &s, &d) == 3) {
                 new_cfg.jitter_level   = (uint16_t)j;
                 new_cfg.smoothing_rate = (uint16_t)s;
                 new_cfg.deadzone_mod   = (uint16_t)d;
                 
-                // Save directly to the hardware flash chip
                 save_settings_to_flash(&new_cfg);
-                load_settings_from_flash(); // Refresh running configuration variables
+                load_settings_from_flash(); 
                 
                 tud_cdc_write_str("SUCCESS: SETTINGS_SAVED\r\n");
                 tud_cdc_write_flush();
@@ -103,7 +94,6 @@ void process_web_serial_commands(void) {
             }
         }
 
-        // Match escape command to return to gameplay layout
         if (strstr(buffer, "REBOOT") != NULL) {
             tud_cdc_write_str("REBOOTING\r\n");
             tud_cdc_write_flush();
@@ -115,9 +105,6 @@ void process_web_serial_commands(void) {
     }
 }
 
-// ====================================================================
-// CORE 1: EXCLUSIVE USB HOST CONTROLLER & STATE SCANNER
-// ====================================================================
 void core1_main(void)
 {
     gpio_init(USB_HOST_PWR_PIN);
@@ -154,9 +141,6 @@ usbh_class_driver_t const* usbh_app_driver_get_cb(uint8_t* driver_count)
     return &usbh_xinput_driver;
 }
 
-// ====================================================================
-// HOST DEVICE EVENT CALLBACKS
-// ====================================================================
 void tuh_xinput_mount_cb(uint8_t dev_addr, uint8_t instance, const xinputh_interface_t* xinput_itf)
 {
     (void)dev_addr; (void)instance; (void)xinput_itf;
@@ -184,7 +168,11 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_i
     int16_t rx = p->sThumbRX;
     int16_t ry = p->sThumbRY;
     
-    humanizer_process(&humanizer, &lx, &ly, &rx, &ry);
+    // Connect variables to updated vector loop sequence 
+    humanizer_process(&humanizer, &lx, &ly, &rx, &ry, 
+                      active_config.jitter_level, 
+                      active_config.smoothing_rate, 
+                      active_config.deadzone_mod);
     
     current_report[0]  = 0x00;
     current_report[1]  = 0x14;
@@ -205,9 +193,6 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_i
     tuh_xinput_receive_report(dev_addr, instance);
 }
 
-// ====================================================================
-// CORE 0: PC DEVICE EMULATION LOOP
-// ====================================================================
 int main(void)
 {
     set_sys_clock_khz(120000, true);
@@ -230,7 +215,7 @@ int main(void)
         tud_task();
         
         if (tud_in_config_mode()) {
-            process_web_serial_commands(); // Use our localized flash-connected parser
+            process_web_serial_commands(); 
         } else if (report_ready) {
             tud_xinput_send_report(current_report, sizeof(current_report));
             report_ready = false;
