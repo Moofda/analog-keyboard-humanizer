@@ -102,8 +102,13 @@ void process_web_serial_commands(void) {
                 tud_cdc_write_str("SUCCESS: SAVED_AND_MORPHING\r\n");
                 tud_cdc_write_flush();
                 
-                // 2. Clear out the serial registers 
-                busy_wait_us_32(50000);
+                // 2. STAGE BACKWARD COMPATIBLE FLUSHING TIMEOUT WINDOWS
+                // Loop explicitly to empty the serial line and allow TinyUSB tasking threads
+                // to push the packets clean out of the physically attached hardware layer.
+                for (int i = 0; i < 150; i++) {
+                    tud_task();
+                    busy_wait_us_32(1000);
+                }
                 
                 // 3. DAISY-CHAIN SYSTEM RESET: Clock-aligned reboot sequence
                 watchdog_reboot(0, 0, 10);
@@ -117,7 +122,13 @@ void process_web_serial_commands(void) {
         if (strstr(buffer, "REBOOT") != NULL) {
             tud_cdc_write_str("REBOOTING\r\n");
             tud_cdc_write_flush();
-            busy_wait_us_32(50000);
+            
+            // Loop explicitly to ensure clear communication transmission window
+            for (int i = 0; i < 50; i++) {
+                tud_task();
+                busy_wait_us_32(1000);
+            }
+            
             watchdog_reboot(0, 0, 10);
             while (1);
         }
