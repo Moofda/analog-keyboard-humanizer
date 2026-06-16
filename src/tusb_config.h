@@ -19,13 +19,17 @@ extern "C" {
 
 // Turn off ALL built-in classes so XInput has exclusive access to Interface 0
 #define CFG_TUD_HID           0
-#define CFG_TUD_CDC           1
+#define CFG_TUD_CDC           1  
 #define CFG_TUD_MSC           0
 #define CFG_TUD_MIDI          0
 #define CFG_TUD_AUDIO         0
 #define CFG_TUD_VIDEO         0
 #define CFG_TUD_DFU_RUNTIME   0
 #define CFG_TUD_VENDOR        0 
+
+// FIFO Buffer sizes required by the TinyUSB CDC Serial Stack
+#define CFG_TUD_CDC_RX_BUFSIZE   64
+#define CFG_TUD_CDC_TX_BUFSIZE   64
 
 // Host Configuration - Listens for your Keyboard's XInput signal
 #define CFG_TUH_ENABLED       1
