@@ -45,6 +45,7 @@ static Humanizer humanizer;
 
 static volatile uint16_t latest_buttons = 0;
 static uint32_t combo_start_time = 0;
+static volatile bool web_config_requested = false; // Inter-core communication flag
 
 // ====================================================================
 // STORAGE ENGINES: READ AND WRITE FLASH WITH LOCKOUT PROTECTION
@@ -160,14 +161,8 @@ void core1_main(void)
             if (combo_start_time == 0) {
                 combo_start_time = now; 
             } else if (now - combo_start_time >= 3000) {
-                // Read active parameters, flip config flag to true, save to flash, and reboot!
-                humanizer_config_t config_toggle;
-                memcpy(&config_toggle, &active_config, sizeof(humanizer_config_t));
-                config_toggle.boot_in_config = 1; 
-                
-                save_settings_to_flash(&config_toggle);
-                
-                watchdog_reboot(0, 0, 10);
+                // Safely flag Core 0 to execute the state swap to avoid thread locking
+                web_config_requested = true;
                 while(1);
             }
         } else {
@@ -256,6 +251,20 @@ int main(void)
     
     while (true) {
         tud_task();
+        
+        // Monitor inter-core flags for manual web config requests
+        if (web_config_requested) {
+            web_config_requested = false;
+            
+            humanizer_config_t config_toggle;
+            memcpy(&config_toggle, &active_config, sizeof(humanizer_config_t));
+            config_toggle.boot_in_config = 1; // Flag system to boot into web configuration
+            
+            save_settings_to_flash(&config_toggle);
+            
+            watchdog_reboot(0, 0, 10);
+            while(1);
+        }
         
         if (tud_in_config_mode()) {
             process_web_serial_commands(); 
