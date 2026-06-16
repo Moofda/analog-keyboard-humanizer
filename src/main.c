@@ -8,8 +8,8 @@
 #include "hardware/clocks.h"
 #include "hardware/watchdog.h" 
 #include "hardware/structs/watchdog.h"
-#include "hardware/flash.h"    // Required for reading/writing internal flash memory
-#include "hardware/sync.h"     // Required for locking core execution during a flash clear
+#include "hardware/flash.h"    
+#include "hardware/sync.h"     
 
 #include "pio_usb.h"         
 #include "tusb.h"
@@ -19,7 +19,6 @@
 
 void tud_set_config_mode(bool enable);
 bool tud_in_config_mode(void);
-void tud_config_handle_serial(void);
 
 #define USB_HOST_PWR_PIN 18
 #define CONFIG_MAGIC_NUM 0x1A2B3C4D 
@@ -27,17 +26,16 @@ void tud_config_handle_serial(void);
 // ====================================================================
 // THE HUMANIZER CONFIGURATION STRUCTURE
 // ====================================================================
-#define FLASH_MAGIC_KEY 0x48554D4E // "HUMN" in hex to verify flash validity
-#define FLASH_TARGET_OFFSET (4 * 1024 * 1024 - FLASH_SECTOR_SIZE) // Safe target at the very end of 4MB flash
+#define FLASH_MAGIC_KEY 0x48554D4E 
+#define FLASH_TARGET_OFFSET (4 * 1024 * 1024 - FLASH_SECTOR_SIZE) 
 
 typedef struct {
-    uint32_t magic;           // Verifies that settings have been saved before
-    uint16_t jitter_level;    // 0 to 100 scale for axis bleeding
-    uint16_t smoothing_rate;  // 0 to 100 scale for analog stick travel lag
-    uint16_t deadzone_mod;    // 0 to 100 scale for micro stick drift simulation
+    uint32_t magic;           
+    uint16_t jitter_level;    
+    uint16_t smoothing_rate;  
+    uint16_t deadzone_mod;    
 } humanizer_config_t;
 
-// Global settings instances
 static humanizer_config_t active_config;
 static const uint8_t *flash_target_contents = (const uint8_t *) (XIP_BASE + FLASH_TARGET_OFFSET);
 
@@ -54,28 +52,67 @@ static uint32_t combo_start_time = 0;
 void load_settings_from_flash(void) {
     humanizer_config_t *flash_profile = (humanizer_config_t *) flash_target_contents;
     
-    // Check if the flash has been initialized before
     if (flash_profile->magic == FLASH_MAGIC_KEY) {
         memcpy(&active_config, flash_profile, sizeof(humanizer_config_t));
     } else {
-        // Fallback default values if the profile is completely blank
         active_config.magic = FLASH_MAGIC_KEY;
-        active_config.jitter_level = 15;   // Default moderate axis bleed
-        active_config.smoothing_rate = 20; // Default subtle thumb motion delay
-        active_config.deadzone_mod = 5;    // Default minor stick drift centering
+        active_config.jitter_level = 15;   
+        active_config.smoothing_rate = 20; 
+        active_config.deadzone_mod = 5;    
     }
 }
 
 void save_settings_to_flash(humanizer_config_t *new_config) {
     new_config->magic = FLASH_MAGIC_KEY;
     
-    // Safety lock: Pause interrupts completely so Core 1 doesn't invoke code while storage is erasing
     uint32_t saved_interrupts = save_and_disable_interrupts();
-    
     flash_range_erase(FLASH_TARGET_OFFSET, FLASH_SECTOR_SIZE);
     flash_range_program(FLASH_TARGET_OFFSET, (const uint8_t *)new_config, sizeof(humanizer_config_t));
-    
     restore_interrupts(saved_interrupts);
+}
+
+// ====================================================================
+// WEB CONFIGURATOR: TEXT PARSER ENGINE
+// ====================================================================
+void process_web_serial_commands(void) {
+    if (tud_cdc_available()) {
+        char buffer[64];
+        uint32_t count = tud_cdc_read(buffer, sizeof(buffer) - 1);
+        buffer[count] = '\0'; 
+
+        // Match the web slider signature: "SET:jitter,smoothing,deadzone"
+        if (strncmp(buffer, "SET:", 4) == 0) {
+            humanizer_config_t new_cfg;
+            int j, s, d;
+            
+            // Extract integers directly from the text buffer string
+            if (sscanf(buffer, "SET:%d,%d,%d", &j, &s, &d) == 3) {
+                new_cfg.jitter_level   = (uint16_t)j;
+                new_cfg.smoothing_rate = (uint16_t)s;
+                new_cfg.deadzone_mod   = (uint16_t)d;
+                
+                // Save directly to the hardware flash chip
+                save_settings_to_flash(&new_cfg);
+                load_settings_from_flash(); // Refresh running configuration variables
+                
+                tud_cdc_write_str("SUCCESS: SETTINGS_SAVED\r\n");
+                tud_cdc_write_flush();
+            } else {
+                tud_cdc_write_str("ERROR: MALFORMED_DATA\r\n");
+                tud_cdc_write_flush();
+            }
+        }
+
+        // Match escape command to return to gameplay layout
+        if (strstr(buffer, "REBOOT") != NULL) {
+            tud_cdc_write_str("REBOOTING\r\n");
+            tud_cdc_write_flush();
+            busy_wait_us_32(50000);
+            
+            watchdog_enable(1, false);
+            while (1);
+        }
+    }
 }
 
 // ====================================================================
@@ -97,13 +134,12 @@ void core1_main(void)
         tuh_task();
         
         uint32_t now = to_ms_since_boot(get_absolute_time());
-        
         if ((latest_buttons & 0x0310) == 0x0310) {
             if (combo_start_time == 0) {
                 combo_start_time = now; 
             } else if (now - combo_start_time >= 3000) {
                 watchdog_hw->scratch[0] = CONFIG_MAGIC_NUM;
-                watchdog_reboot(0, 0, 10);
+                watchdog_enable(1, false);
                 while(1);
             }
         } else {
@@ -148,7 +184,6 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_i
     int16_t rx = p->sThumbRX;
     int16_t ry = p->sThumbRY;
     
-    // Pass stick axes through the humanizer system
     humanizer_process(&humanizer, &lx, &ly, &rx, &ry);
     
     current_report[0]  = 0x00;
@@ -178,9 +213,7 @@ int main(void)
     set_sys_clock_khz(120000, true);
     stdio_init_all();
     
-    // Read saved slider values out of the flash vault instantly on boot
     load_settings_from_flash();
-    
     humanizer_init(&humanizer);
     
     if (watchdog_hw->scratch[0] == CONFIG_MAGIC_NUM) {
@@ -197,7 +230,7 @@ int main(void)
         tud_task();
         
         if (tud_in_config_mode()) {
-            tud_config_handle_serial();
+            process_web_serial_commands(); // Use our localized flash-connected parser
         } else if (report_ready) {
             tud_xinput_send_report(current_report, sizeof(current_report));
             report_ready = false;
