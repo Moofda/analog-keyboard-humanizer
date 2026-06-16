@@ -21,10 +21,9 @@ void tud_set_config_mode(bool enable);
 bool tud_in_config_mode(void);
 
 #define USB_HOST_PWR_PIN 18
-#define CONFIG_MAGIC_NUM 0x1A2B3C4D 
 
 // ====================================================================
-// THE HUMANIZER CONFIGURATION STRUCTURE
+// THE HUMANIZER CONFIGURATION STRUCTURE (WITH PERSISTENT MODE STATE)
 // ====================================================================
 #define FLASH_MAGIC_KEY 0x48554D4E 
 #define FLASH_TARGET_OFFSET (4 * 1024 * 1024 - FLASH_SECTOR_SIZE) 
@@ -34,6 +33,7 @@ typedef struct {
     uint16_t jitter_level;    
     uint16_t smoothing_rate;  
     uint16_t deadzone_mod;    
+    uint16_t boot_in_config;  // 0 = XInput Gamepad Mode, 1 = Web Config Mode
 } humanizer_config_t;
 
 static humanizer_config_t active_config;
@@ -59,6 +59,7 @@ void load_settings_from_flash(void) {
         active_config.jitter_level = 0;    
         active_config.smoothing_rate = 0; 
         active_config.deadzone_mod = 0;    
+        active_config.boot_in_config = 0; // Default straight to XInput Gamepad
     }
 }
 
@@ -78,7 +79,7 @@ void save_settings_to_flash(humanizer_config_t *new_config) {
 }
 
 // ====================================================================
-// WEB CONFIGURATOR: TEXT PARSER ENGINE (AUTOMATED DAISY-CHAIN)
+// WEB CONFIGURATOR: TEXT PARSER ENGINE
 // ====================================================================
 void process_web_serial_commands(void) {
     if (tud_cdc_available()) {
@@ -94,23 +95,21 @@ void process_web_serial_commands(void) {
                 new_cfg.jitter_level   = (uint16_t)j;
                 new_cfg.smoothing_rate = (uint16_t)s;
                 new_cfg.deadzone_mod   = (uint16_t)d;
+                new_cfg.boot_in_config = 0; // Force boot directly into XInput mode!
                 
-                // 1. Save directly to physical storage vault
+                // 1. Save configuration and targeted mode state to storage vault
                 save_settings_to_flash(&new_cfg);
-                load_settings_from_flash(); 
                 
                 tud_cdc_write_str("SUCCESS: SAVED_AND_MORPHING\r\n");
                 tud_cdc_write_flush();
                 
-                // 2. STAGE BACKWARD COMPATIBLE FLUSHING TIMEOUT WINDOWS
-                // Loop explicitly to empty the serial line and allow TinyUSB tasking threads
-                // to push the packets clean out of the physically attached hardware layer.
-                for (int i = 0; i < 150; i++) {
+                // 2. Allow TinyUSB engine to flush out serial line completely
+                for (int i = 0; i < 100; i++) {
                     tud_task();
                     busy_wait_us_32(1000);
                 }
                 
-                // 3. DAISY-CHAIN SYSTEM RESET: Clock-aligned reboot sequence
+                // 3. Trigger immediate hardware reset line
                 watchdog_reboot(0, 0, 10);
                 while (1);
             } else {
@@ -123,7 +122,6 @@ void process_web_serial_commands(void) {
             tud_cdc_write_str("REBOOTING\r\n");
             tud_cdc_write_flush();
             
-            // Loop explicitly to ensure clear communication transmission window
             for (int i = 0; i < 50; i++) {
                 tud_task();
                 busy_wait_us_32(1000);
@@ -156,11 +154,19 @@ void core1_main(void)
         tuh_task();
         
         uint32_t now = to_ms_since_boot(get_absolute_time());
+        
+        // PHYSICAL SHORTCUT HOTKEY COMBO (Hold buttons 3 seconds to toggle Web Config Mode)
         if ((latest_buttons & 0x0310) == 0x0310) {
             if (combo_start_time == 0) {
                 combo_start_time = now; 
             } else if (now - combo_start_time >= 3000) {
-                watchdog_hw->scratch[0] = CONFIG_MAGIC_NUM;
+                // Read active parameters, flip config flag to true, save to flash, and reboot!
+                humanizer_config_t config_toggle;
+                memcpy(&config_toggle, &active_config, sizeof(humanizer_config_t));
+                config_toggle.boot_in_config = 1; 
+                
+                save_settings_to_flash(&config_toggle);
+                
                 watchdog_reboot(0, 0, 10);
                 while(1);
             }
@@ -230,17 +236,16 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_i
 int main(void)
 {
     set_sys_clock_khz(120000, true);
-    
-    // CRITICAL FIX: Turn on the Watchdog internal reference countdown clocks
     watchdog_start_tick(12); 
     
     stdio_init_all();
     
+    // Load configuration directly from physical storage sector
     load_settings_from_flash();
     humanizer_init(&humanizer);
     
-    if (watchdog_hw->scratch[0] == CONFIG_MAGIC_NUM) {
-        watchdog_hw->scratch[0] = 0;
+    // Evaluate explicit persistent storage flags to determine USB configurations
+    if (active_config.boot_in_config == 1) {
         tud_set_config_mode(true);
     } else {
         tud_set_config_mode(false);
