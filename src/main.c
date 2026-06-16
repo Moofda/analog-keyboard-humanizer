@@ -8,6 +8,8 @@
 #include "hardware/clocks.h"
 #include "hardware/watchdog.h" 
 #include "hardware/structs/watchdog.h"
+#include "hardware/flash.h"    // Required for reading/writing internal flash memory
+#include "hardware/sync.h"     // Required for locking core execution during a flash clear
 
 #include "pio_usb.h"         
 #include "tusb.h"
@@ -15,7 +17,6 @@
 #include "tud_xinput.h"
 #include "humanizer.h"
 
-// Forward declarations to link custom functions inside tud_xinput.c
 void tud_set_config_mode(bool enable);
 bool tud_in_config_mode(void);
 void tud_config_handle_serial(void);
@@ -23,13 +24,59 @@ void tud_config_handle_serial(void);
 #define USB_HOST_PWR_PIN 18
 #define CONFIG_MAGIC_NUM 0x1A2B3C4D 
 
+// ====================================================================
+// THE HUMANIZER CONFIGURATION STRUCTURE
+// ====================================================================
+#define FLASH_MAGIC_KEY 0x48554D4E // "HUMN" in hex to verify flash validity
+#define FLASH_TARGET_OFFSET (4 * 1024 * 1024 - FLASH_SECTOR_SIZE) // Safe target at the very end of 4MB flash
+
+typedef struct {
+    uint32_t magic;           // Verifies that settings have been saved before
+    uint16_t jitter_level;    // 0 to 100 scale for axis bleeding
+    uint16_t smoothing_rate;  // 0 to 100 scale for analog stick travel lag
+    uint16_t deadzone_mod;    // 0 to 100 scale for micro stick drift simulation
+} humanizer_config_t;
+
+// Global settings instances
+static humanizer_config_t active_config;
+static const uint8_t *flash_target_contents = (const uint8_t *) (XIP_BASE + FLASH_TARGET_OFFSET);
+
 static uint8_t current_report[20] = {0};
 static volatile bool report_ready = false; 
 static Humanizer humanizer;
 
-// Caching variables for the continuous state-machine background scanner
 static volatile uint16_t latest_buttons = 0;
 static uint32_t combo_start_time = 0;
+
+// ====================================================================
+// STORAGE ENGINES: READ AND WRITE FLASH
+// ====================================================================
+void load_settings_from_flash(void) {
+    humanizer_config_t *flash_profile = (humanizer_config_t *) flash_target_contents;
+    
+    // Check if the flash has been initialized before
+    if (flash_profile->magic == FLASH_MAGIC_KEY) {
+        memcpy(&active_config, flash_profile, sizeof(humanizer_config_t));
+    } else {
+        // Fallback default values if the profile is completely blank
+        active_config.magic = FLASH_MAGIC_KEY;
+        active_config.jitter_level = 15;   // Default moderate axis bleed
+        active_config.smoothing_rate = 20; // Default subtle thumb motion delay
+        active_config.deadzone_mod = 5;    // Default minor stick drift centering
+    }
+}
+
+void save_settings_to_flash(humanizer_config_t *new_config) {
+    new_config->magic = FLASH_MAGIC_KEY;
+    
+    // Safety lock: Pause interrupts completely so Core 1 doesn't invoke code while storage is erasing
+    uint32_t saved_interrupts = save_and_disable_interrupts();
+    
+    flash_range_erase(FLASH_TARGET_OFFSET, FLASH_SECTOR_SIZE);
+    flash_range_program(FLASH_TARGET_OFFSET, (const uint8_t *)new_config, sizeof(humanizer_config_t));
+    
+    restore_interrupts(saved_interrupts);
+}
 
 // ====================================================================
 // CORE 1: EXCLUSIVE USB HOST CONTROLLER & STATE SCANNER
@@ -49,22 +96,18 @@ void core1_main(void)
     while (true) {
         tuh_task();
         
-        // CONTINUOUS BACKGROUND STATE SCANNER (Matches OGX-Mini's design)
-        // Keeps ticking even if the USB cable goes completely quiet during a stationary hold
         uint32_t now = to_ms_since_boot(get_absolute_time());
         
-        // COMBO MASK: Start (0x0010) + LB (0x0100) + RB (0x0200) = 0x0310
         if ((latest_buttons & 0x0310) == 0x0310) {
             if (combo_start_time == 0) {
-                combo_start_time = now; // Set the baseline anchor time
+                combo_start_time = now; 
             } else if (now - combo_start_time >= 3000) {
-                // Pinched successfully for 3 absolute seconds!
                 watchdog_hw->scratch[0] = CONFIG_MAGIC_NUM;
                 watchdog_reboot(0, 0, 10);
                 while(1);
             }
         } else {
-            combo_start_time = 0; // Clear immediately if any button slips
+            combo_start_time = 0; 
         }
     }
 }
@@ -88,7 +131,7 @@ void tuh_xinput_umount_cb(uint8_t dev_addr, uint8_t instance)
 {
     (void)dev_addr; (void)instance;
     report_ready = false;
-    latest_buttons = 0; // Reset cache if the keyboard is disconnected
+    latest_buttons = 0; 
     combo_start_time = 0;
     memset(current_report, 0, sizeof(current_report));
 }
@@ -98,7 +141,6 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_i
     (void)dev_addr; (void)instance; (void)len;
     const xinput_gamepad_t* p = &xid_itf->pad;
     
-    // Cache the absolute latest raw button data instantly for Core 1's scanner thread
     latest_buttons = p->wButtons;
 
     int16_t lx = p->sThumbLX;
@@ -106,6 +148,7 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_i
     int16_t rx = p->sThumbRX;
     int16_t ry = p->sThumbRY;
     
+    // Pass stick axes through the humanizer system
     humanizer_process(&humanizer, &lx, &ly, &rx, &ry);
     
     current_report[0]  = 0x00;
@@ -134,6 +177,10 @@ int main(void)
 {
     set_sys_clock_khz(120000, true);
     stdio_init_all();
+    
+    // Read saved slider values out of the flash vault instantly on boot
+    load_settings_from_flash();
+    
     humanizer_init(&humanizer);
     
     if (watchdog_hw->scratch[0] == CONFIG_MAGIC_NUM) {
