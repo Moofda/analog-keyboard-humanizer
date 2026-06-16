@@ -78,7 +78,7 @@ void save_settings_to_flash(humanizer_config_t *new_config) {
 }
 
 // ====================================================================
-// WEB CONFIGURATOR: TEXT PARSER ENGINE
+// WEB CONFIGURATOR: TEXT PARSER ENGINE (AUTOMATED DAISY-CHAIN)
 // ====================================================================
 void process_web_serial_commands(void) {
     if (tud_cdc_available()) {
@@ -95,11 +95,19 @@ void process_web_serial_commands(void) {
                 new_cfg.smoothing_rate = (uint16_t)s;
                 new_cfg.deadzone_mod   = (uint16_t)d;
                 
+                // 1. Save directly to physical storage vault
                 save_settings_to_flash(&new_cfg);
                 load_settings_from_flash(); 
                 
-                tud_cdc_write_str("SUCCESS: SETTINGS_SAVED\r\n");
+                tud_cdc_write_str("SUCCESS: SAVED_AND_MORPHING\r\n");
                 tud_cdc_write_flush();
+                
+                // 2. Clear out the serial registers 
+                busy_wait_us_32(50000);
+                
+                // 3. DAISY-CHAIN SYSTEM RESET: Clock-aligned reboot sequence
+                watchdog_reboot(0, 0, 10);
+                while (1);
             } else {
                 tud_cdc_write_str("ERROR: MALFORMED_DATA\r\n");
                 tud_cdc_write_flush();
@@ -110,8 +118,6 @@ void process_web_serial_commands(void) {
             tud_cdc_write_str("REBOOTING\r\n");
             tud_cdc_write_flush();
             busy_wait_us_32(50000);
-            
-            // FIX: Restored the proper clock-aligned SDK reset function
             watchdog_reboot(0, 0, 10);
             while (1);
         }
@@ -213,6 +219,10 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_i
 int main(void)
 {
     set_sys_clock_khz(120000, true);
+    
+    // CRITICAL FIX: Turn on the Watchdog internal reference countdown clocks
+    watchdog_start_tick(12); 
+    
     stdio_init_all();
     
     load_settings_from_flash();
