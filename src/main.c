@@ -65,7 +65,7 @@ void load_settings_from_flash(void) {
 void save_settings_to_flash(humanizer_config_t *new_config) {
     new_config->magic = FLASH_MAGIC_KEY;
     
-    // CRITICAL FIX: Order Core 1 to park in safe RAM storage before erasing flash
+    // Order Core 1 to park in safe RAM storage before erasing flash
     multicore_lockout_start_blocking();
     
     uint32_t saved_interrupts = save_and_disable_interrupts();
@@ -73,7 +73,7 @@ void save_settings_to_flash(humanizer_config_t *new_config) {
     flash_range_program(FLASH_TARGET_OFFSET, (const uint8_t *)new_config, sizeof(humanizer_config_t));
     restore_interrupts(saved_interrupts);
     
-    // CRITICAL FIX: Release Core 1 to resume normal operations
+    // Release Core 1 to resume normal operations
     multicore_lockout_end_blocking();
 }
 
@@ -111,7 +111,8 @@ void process_web_serial_commands(void) {
             tud_cdc_write_flush();
             busy_wait_us_32(50000);
             
-            watchdog_enable(1, false);
+            // FIX: Restored the proper clock-aligned SDK reset function
+            watchdog_reboot(0, 0, 10);
             while (1);
         }
     }
@@ -122,7 +123,6 @@ void process_web_serial_commands(void) {
 // ====================================================================
 void core1_main(void)
 {
-    // Initialize the lockout listener on Core 1 so it can respond to pause requests
     multicore_lockout_victim_init();
 
     gpio_init(USB_HOST_PWR_PIN);
@@ -144,7 +144,7 @@ void core1_main(void)
                 combo_start_time = now; 
             } else if (now - combo_start_time >= 3000) {
                 watchdog_hw->scratch[0] = CONFIG_MAGIC_NUM;
-                watchdog_enable(1, false);
+                watchdog_reboot(0, 0, 10);
                 while(1);
             }
         } else {
