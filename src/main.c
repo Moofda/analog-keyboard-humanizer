@@ -65,7 +65,6 @@ void load_settings_from_flash(void) {
 void save_settings_to_flash(humanizer_config_t *new_config) {
     new_config->magic = FLASH_MAGIC_KEY;
     
-    // Order Core 1 to park in safe RAM storage before erasing flash
     multicore_lockout_start_blocking();
     
     uint32_t saved_interrupts = save_and_disable_interrupts();
@@ -73,7 +72,6 @@ void save_settings_to_flash(humanizer_config_t *new_config) {
     flash_range_program(FLASH_TARGET_OFFSET, (const uint8_t *)new_config, sizeof(humanizer_config_t));
     restore_interrupts(saved_interrupts);
     
-    // Release Core 1 to resume normal operations
     multicore_lockout_end_blocking();
 }
 
@@ -95,7 +93,7 @@ void process_web_serial_commands(void) {
                 new_cfg.smoothing_rate = (uint16_t)s;
                 new_cfg.deadzone_mod   = (uint16_t)d;
                 
-                // 1. Save directly to flash storage
+                // 1. Save directly to flash storage (Safe now because Core 1 is asleep)
                 save_settings_to_flash(&new_cfg);
                 
                 // 2. Clear out hardware registers so it boots to Gamepad mode next time
@@ -120,8 +118,20 @@ void process_web_serial_commands(void) {
 // ====================================================================
 void core1_main(void)
 {
+    // Register this core to accept pause commands from Core 0
     multicore_lockout_victim_init();
 
+    // 🛑 CRITICAL PIO CRASH FIX 🛑
+    // If we are in Web Config Mode, DO NOT start the PIO USB Host engine. 
+    // Just put Core 1 to sleep. This prevents the USB lines from crashing 
+    // when Core 0 pauses Core 1 to write to the flash memory!
+    if (tud_in_config_mode()) {
+        while (true) {
+            tight_loop_contents(); // Idle safely forever
+        }
+    }
+
+    // --- Standard Gamepad USB Host Mode ---
     gpio_init(USB_HOST_PWR_PIN);
     gpio_set_dir(USB_HOST_PWR_PIN, GPIO_OUT);
     gpio_put(USB_HOST_PWR_PIN, 1);
@@ -137,12 +147,10 @@ void core1_main(void)
         
         uint32_t now = to_ms_since_boot(get_absolute_time());
         
-        // RESTORED ORIGINAL WORK combo detection logic (No thread freezing locks)
         if ((latest_buttons & 0x0310) == 0x0310) {
             if (combo_start_time == 0) {
                 combo_start_time = now; 
             } else if (now - combo_start_time >= 3000) {
-                // Set the hardware register directly and reset immediately
                 watchdog_hw->scratch[0] = CONFIG_MAGIC_NUM;
                 watchdog_reboot(0, 0, 10);
                 while(1);
@@ -220,7 +228,6 @@ int main(void)
     load_settings_from_flash();
     humanizer_init(&humanizer);
     
-    // Check hardware scratch register to decide mode
     if (watchdog_hw->scratch[0] == CONFIG_MAGIC_NUM) {
         tud_set_config_mode(true);
     } else {
