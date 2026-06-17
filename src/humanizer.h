@@ -4,8 +4,10 @@
 #include <stdint.h>
 
 typedef struct {
-    float noise_l; // Tracks the current wobble angle for the left stick
-    float noise_r; // Tracks the current wobble angle for the right stick
+    float current_noise_l; // Current wobble position
+    float target_noise_l;  // Destination wobble position
+    float current_noise_r;
+    float target_noise_r;
 } Humanizer;
 
 void humanizer_init(Humanizer* h);
