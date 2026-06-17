@@ -13,7 +13,8 @@ typedef struct {
 
 void humanizer_init(Humanizer* h);
 
+// UPDATED: Added smoothing_rate to the header!
 void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int16_t* ry, 
-                       uint16_t circ_error, uint16_t axis_deviation);
+                       uint16_t circ_error, uint16_t axis_deviation, uint16_t smoothing_rate);
 
 #endif
