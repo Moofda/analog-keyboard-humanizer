@@ -31,10 +31,10 @@ bool tud_in_config_mode(void);
 
 typedef struct {
     uint32_t magic;           
-    uint16_t circ_error;      // PHASE 1: Gate Circularity
-    uint16_t jitter_level;    // PHASE 2: (Disabled for now)
-    uint16_t smoothing_rate;  // PHASE 3: (Disabled for now)
-    uint16_t deadzone_mod;    // PHASE 4: (Disabled for now)
+    uint16_t circ_error;      // PHASE 1
+    uint16_t jitter_level;    // PHASE 2 (Axis Deviation)
+    uint16_t smoothing_rate;  
+    uint16_t deadzone_mod;    
 } humanizer_config_t;
 
 static humanizer_config_t active_config;
@@ -57,7 +57,7 @@ void load_settings_from_flash(void) {
         memcpy(&active_config, flash_profile, sizeof(humanizer_config_t));
     } else {
         active_config.magic = FLASH_MAGIC_KEY;
-        active_config.circ_error = 3; // Default to 3% error
+        active_config.circ_error = 3; 
         active_config.jitter_level = 0;    
         active_config.smoothing_rate = 0; 
         active_config.deadzone_mod = 0;    
@@ -78,9 +78,6 @@ void save_settings_to_flash(humanizer_config_t *new_config) {
     restore_interrupts(saved_interrupts);
 }
 
-// ====================================================================
-// WEB CONFIGURATOR: NON-BLOCKING TEXT PARSER
-// ====================================================================
 void process_web_serial_commands(void) {
     if (tud_cdc_available()) {
         char buffer[64];
@@ -89,7 +86,6 @@ void process_web_serial_commands(void) {
 
         if (strncmp(buffer, "SET:", 4) == 0) {
             int c, j, s, d;
-            // Now parsing 4 variables!
             if (sscanf(buffer, "SET:%d,%d,%d,%d", &c, &j, &s, &d) == 4) {
                 active_config.circ_error     = (uint16_t)c;
                 active_config.jitter_level   = (uint16_t)j;
@@ -106,9 +102,6 @@ void process_web_serial_commands(void) {
     }
 }
 
-// ====================================================================
-// CORE 1: GAMEPAD LOGIC
-// ====================================================================
 void core1_main(void)
 {
     gpio_init(USB_HOST_PWR_PIN);
@@ -173,8 +166,8 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_i
     int16_t rx = p->sThumbRX;
     int16_t ry = p->sThumbRY;
     
-    // Pass the active circularity setting into the math engine
-    humanizer_process(&humanizer, &lx, &ly, &rx, &ry, active_config.circ_error);
+    // --- UPDATED CALL: Feeding active_config.jitter_level into the engine ---
+    humanizer_process(&humanizer, &lx, &ly, &rx, &ry, active_config.circ_error, active_config.jitter_level);
     
     current_report[0]  = 0x00;
     current_report[1]  = 0x14;
