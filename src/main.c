@@ -23,9 +23,6 @@ bool tud_in_config_mode(void);
 #define USB_HOST_PWR_PIN 18
 #define CONFIG_MAGIC_NUM 0x1A2B3C4D 
 
-// ====================================================================
-// THE HUMANIZER CONFIGURATION STRUCTURE
-// ====================================================================
 #define FLASH_MAGIC_KEY 0x48554D4E 
 #define FLASH_TARGET_OFFSET (4 * 1024 * 1024 - FLASH_SECTOR_SIZE) 
 
@@ -46,9 +43,6 @@ static Humanizer humanizer;
 static volatile uint16_t latest_buttons = 0;
 static uint32_t combo_start_time = 0;
 
-// ====================================================================
-// STORAGE ENGINES: READ AND WRITE FLASH WITH LOCKOUT PROTECTION
-// ====================================================================
 void load_settings_from_flash(void) {
     humanizer_config_t *flash_profile = (humanizer_config_t *) flash_target_contents;
     
@@ -65,25 +59,22 @@ void load_settings_from_flash(void) {
 void save_settings_to_flash(humanizer_config_t *new_config) {
     new_config->magic = FLASH_MAGIC_KEY;
     
-    multicore_lockout_start_blocking();
-    
     uint32_t saved_interrupts = save_and_disable_interrupts();
     flash_range_erase(FLASH_TARGET_OFFSET, FLASH_SECTOR_SIZE);
     flash_range_program(FLASH_TARGET_OFFSET, (const uint8_t *)new_config, sizeof(humanizer_config_t));
     restore_interrupts(saved_interrupts);
-    
-    multicore_lockout_end_blocking();
 }
 
-// ====================================================================
-// WEB CONFIGURATOR: TEXT PARSER ENGINE
-// ====================================================================
+// -------------------------------------------------------------------------
+// SEPARATED PARSER LOGIC
+// -------------------------------------------------------------------------
 void process_web_serial_commands(void) {
     if (tud_cdc_available()) {
         char buffer[64];
         uint32_t count = tud_cdc_read(buffer, sizeof(buffer) - 1);
         buffer[count] = '\0'; 
 
+        // COMMAND 1: SAVE ONLY
         if (strncmp(buffer, "SET:", 4) == 0) {
             humanizer_config_t new_cfg;
             int j, s, d;
@@ -93,19 +84,22 @@ void process_web_serial_commands(void) {
                 new_cfg.smoothing_rate = (uint16_t)s;
                 new_cfg.deadzone_mod   = (uint16_t)d;
                 
-                // 1. Save directly to flash storage (Safe now because Core 1 is asleep)
                 save_settings_to_flash(&new_cfg);
                 
-                // 2. Clear out hardware registers so it boots to Gamepad mode next time
-                watchdog_hw->scratch[0] = 0;
-                
-                // 3. Trigger immediate hardware reboot sequence
-                watchdog_reboot(0, 0, 10);
-                while (1);
+                tud_cdc_write_str("SAVED\r\n");
+                tud_cdc_write_flush();
             }
         }
 
+        // COMMAND 2: REBOOT ONLY
         if (strstr(buffer, "REBOOT") != NULL) {
+            tud_cdc_write_str("REBOOTING\r\n");
+            tud_cdc_write_flush();
+            
+            // Allow buffer to empty slightly
+            for (int i = 0; i < 50; i++) { tud_task(); busy_wait_us_32(1000); }
+            
+            // Wipe hardware register and reset
             watchdog_hw->scratch[0] = 0;
             watchdog_reboot(0, 0, 10);
             while (1);
@@ -113,25 +107,11 @@ void process_web_serial_commands(void) {
     }
 }
 
-// ====================================================================
-// CORE 1: EXCLUSIVE USB HOST CONTROLLER & STATE SCANNER
-// ====================================================================
+// -------------------------------------------------------------------------
+// CORE 1: GAMEPAD LOGIC
+// -------------------------------------------------------------------------
 void core1_main(void)
 {
-    // Register this core to accept pause commands from Core 0
-    multicore_lockout_victim_init();
-
-    // 🛑 CRITICAL PIO CRASH FIX 🛑
-    // If we are in Web Config Mode, DO NOT start the PIO USB Host engine. 
-    // Just put Core 1 to sleep. This prevents the USB lines from crashing 
-    // when Core 0 pauses Core 1 to write to the flash memory!
-    if (tud_in_config_mode()) {
-        while (true) {
-            tight_loop_contents(); // Idle safely forever
-        }
-    }
-
-    // --- Standard Gamepad USB Host Mode ---
     gpio_init(USB_HOST_PWR_PIN);
     gpio_set_dir(USB_HOST_PWR_PIN, GPIO_OUT);
     gpio_put(USB_HOST_PWR_PIN, 1);
@@ -235,7 +215,10 @@ int main(void)
     }
     
     tud_init(BOARD_TUD_RHPORT);
-    multicore_launch_core1(core1_main);
+    
+    if (!tud_in_config_mode()) {
+        multicore_launch_core1(core1_main);
+    }
     
     while (true) {
         tud_task();
