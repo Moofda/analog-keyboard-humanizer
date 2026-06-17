@@ -5,44 +5,53 @@
 #define AXIS_MAX 32767.0f 
 
 void humanizer_init(Humanizer* h) {
-    h->noise_l = 0.0f;
-    h->noise_r = 0.0f;
+    h->current_noise_l = 0.0f;
+    h->target_noise_l = 0.0f;
+    h->current_noise_r = 0.0f;
+    h->target_noise_r = 0.0f;
 }
 
 // Internal helper to apply math to a single stick
 void process_stick(int16_t* out_x, int16_t* out_y, int16_t raw_x, int16_t raw_y, 
-                   uint16_t error_pct, uint16_t deviation_level, float* noise_state) {
+                   uint16_t error_pct, uint16_t deviation_level, 
+                   float* current_noise, float* target_noise) {
     
+    // --- 1. THE 24/7 NOISE ENGINE ---
+    // Runs constantly so instant presses inherit a random starting offset!
+    if (deviation_level > 0) {
+        // If we reached our current random target, pick a new one (-1.0 to 1.0)
+        if (fabsf(*target_noise - *current_noise) < 0.05f) {
+            *target_noise = ((float)rand() / (float)(RAND_MAX)) * 2.0f - 1.0f;
+        }
+        // Smoothly sweep current noise toward the target
+        // The multiplier (0.005f) controls the speed of the thumb wander
+        *current_noise = (*current_noise) + ((*target_noise - *current_noise) * 0.005f);
+    } else {
+        *current_noise = 0.0f;
+        *target_noise = 0.0f;
+    }
+
     float x = (float)raw_x;
     float y = (float)raw_y;
-
     float magnitude = sqrtf((x * x) + (y * y));
     
     if (magnitude > 0) {
         float angle = atan2f(y, x);
 
-        // --- PHASE 2: AXIS DEVIATION (Smooth Rotational Noise) ---
+        // --- 2. APPLY THE SWEEPING WOBBLE ---
         if (deviation_level > 0) {
-            // Pick a random target between -1.0 and +1.0
-            float random_target = ((float)rand() / (float)(RAND_MAX)) * 2.0f - 1.0f;
-            
-            // Low-Pass Filter: Pull the current noise state 2% toward the target every millisecond
-            *noise_state = (*noise_state) + ((random_target - *noise_state) * 0.02f);
-            
-            // Scale the slider (0-100) to a max wobble of +/- 5 degrees
-            float max_wobble_rads = (deviation_level / 100.0f) * (5.0f * (M_PI / 180.0f));
-            
-            // Warp the true angle
-            angle += (*noise_state * max_wobble_rads);
+            // Scale slider (0-100) to max wobble degrees (e.g., up to +/- 6 degrees)
+            float max_wobble_rads = (deviation_level / 100.0f) * (6.0f * (M_PI / 180.0f));
+            angle += (*current_noise * max_wobble_rads);
         }
 
-        // --- PHASE 1: GATE CIRCULARITY ---
+        // --- 3. GATE CIRCULARITY ---
         float limit = AXIS_MAX * (1.0f + (error_pct / 100.0f));
         if (magnitude > limit) {
-            magnitude = limit; // Clamp it to the circular gate
+            magnitude = limit; 
         }
 
-        // Convert the warped angle and clamped magnitude back to X/Y coordinates
+        // Convert back to X/Y
         x = magnitude * cosf(angle);
         y = magnitude * sinf(angle);
     }
@@ -60,6 +69,7 @@ void process_stick(int16_t* out_x, int16_t* out_y, int16_t raw_x, int16_t raw_y,
 void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int16_t* ry, 
                        uint16_t circ_error, uint16_t axis_deviation) {
     
-    process_stick(lx, ly, *lx, *ly, circ_error, axis_deviation, &(h->noise_l));
-    process_stick(rx, ry, *rx, *ry, circ_error, axis_deviation, &(h->noise_r));
+    // Pass the state memory pointers into the processor
+    process_stick(lx, ly, *lx, *ly, circ_error, axis_deviation, &(h->current_noise_l), &(h->target_noise_l));
+    process_stick(rx, ry, *rx, *ry, circ_error, axis_deviation, &(h->current_noise_r), &(h->target_noise_r));
 }
