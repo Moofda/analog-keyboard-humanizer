@@ -29,12 +29,12 @@ bool tud_in_config_mode(void);
 #define FLASH_MAGIC_KEY 0x48554D4E 
 #define FLASH_TARGET_OFFSET (1024 * 1024) 
 
+// UPDATED: Eradicated the deadzone_mod variable entirely
 typedef struct {
     uint32_t magic;           
     uint16_t circ_error;      // PHASE 1
     uint16_t jitter_level;    // PHASE 2 (Axis Deviation)
-    uint16_t smoothing_rate;  
-    uint16_t deadzone_mod;    
+    uint16_t smoothing_rate;  // PHASE 3 (Polar Smoothing)
 } humanizer_config_t;
 
 static humanizer_config_t active_config;
@@ -56,11 +56,11 @@ void load_settings_from_flash(void) {
     if (flash_profile->magic == FLASH_MAGIC_KEY) {
         memcpy(&active_config, flash_profile, sizeof(humanizer_config_t));
     } else {
+        // UPDATED: Removed deadzone fallback memory mapping
         active_config.magic = FLASH_MAGIC_KEY;
         active_config.circ_error = 3; 
         active_config.jitter_level = 0;    
         active_config.smoothing_rate = 0; 
-        active_config.deadzone_mod = 0;    
     }
 }
 
@@ -85,12 +85,12 @@ void process_web_serial_commands(void) {
         buffer[count] = '\0'; 
 
         if (strncmp(buffer, "SET:", 4) == 0) {
-            int c, j, s, d;
-            if (sscanf(buffer, "SET:%d,%d,%d,%d", &c, &j, &s, &d) == 4) {
+            // UPDATED: The bouncer now only expects 3 variables
+            int c, j, s;
+            if (sscanf(buffer, "SET:%d,%d,%d", &c, &j, &s) == 3) {
                 active_config.circ_error     = (uint16_t)c;
                 active_config.jitter_level   = (uint16_t)j;
                 active_config.smoothing_rate = (uint16_t)s;
-                active_config.deadzone_mod   = (uint16_t)d;
                 
                 tud_cdc_write_str("DATA_RECEIVED_AWAITING_LOCK\r\n");
                 tud_cdc_write_flush();
@@ -166,7 +166,6 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_i
     int16_t rx = p->sThumbRX;
     int16_t ry = p->sThumbRY;
     
-    // --- UPDATED CALL: Feeding active_config.jitter_level into the engine ---
     humanizer_process(&humanizer, &lx, &ly, &rx, &ry, active_config.circ_error, active_config.jitter_level, active_config.smoothing_rate);
     
     current_report[0]  = 0x00;
