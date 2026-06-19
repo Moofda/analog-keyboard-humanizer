@@ -19,7 +19,6 @@ void humanizer_init(Humanizer* h) {
 }
 
 // A special math helper to ensure the angle always takes the shortest, natural path 
-// (so it doesn't spin 360 degrees the wrong way when crossing the zero point!)
 float lerp_angle(float current, float target, float alpha) {
     float diff = target - current;
     while (diff > M_PI) diff -= 2.0f * M_PI;
@@ -56,26 +55,46 @@ void process_stick(int16_t* out_x, int16_t* out_y, int16_t raw_x, int16_t raw_y,
 
     // We isolate the TARGET math from the SMOOTHING math
     float target_mag = raw_mag;
-    float target_angle = *prev_out_angle; // Default to last known angle if perfectly centered
+    float target_angle = *prev_out_angle; 
 
     if (raw_mag > 0) {
         target_angle = atan2f(y, x);
 
+        // ==========================================
+        // SPRINT 1: AXIS ROTATION (ERGONOMIC TILT)
+        // ==========================================
+        // Permanently shifts baseline by -5.0 degrees
+        float rotation_offset = -5.0f * (M_PI / 180.0f);
+        target_angle += rotation_offset;
+        
+        // Keep bounded
+        if (target_angle > M_PI) target_angle -= 2.0f * M_PI;
+        if (target_angle < -M_PI) target_angle += 2.0f * M_PI;
+
         if (deviation_level > 0) {
-            // INCREASED WOBBLE SCALE: Up to 20 degrees!
             float max_wobble_rads = (deviation_level / 100.0f) * (20.0f * (M_PI / 180.0f));
             
             float deflection_ratio = raw_mag / AXIS_MAX;
             if (deflection_ratio > 1.0f) deflection_ratio = 1.0f;
             
             float looseness = 1.0f - deflection_ratio; 
+            // Sprint 1 Edge-Wobble Floor Lift (Already implemented by you!)
             float curve_multiplier = 0.25f + (0.75f * looseness);
             
             target_angle += (wave * max_wobble_rads * curve_multiplier);
         }
 
-        // Phase 1 Circularity
-        float limit = AXIS_MAX * (1.0f + (error_pct / 100.0f));
+        // ==========================================
+        // SPRINT 1: THE BREATHING OUTER RING
+        // ==========================================
+        // Uses your existing phase clock. At 0.002 base speed per frame, 
+        // sinf(*phase * 0.8f) yields a nice slow 15-second breathing cycle.
+        float breathing_wave = sinf(*phase * 0.8f);
+        float breathing_scaler = 0.5f + (0.5f * breathing_wave);
+        float dynamic_max_gate = AXIS_MAX * (1.0f - (0.015f * breathing_scaler));
+
+        // Phase 1 Circularity applied to the new breathing gate
+        float limit = dynamic_max_gate * (1.0f + (error_pct / 100.0f));
         if (target_mag > limit) {
             target_mag = limit; 
         }
@@ -90,10 +109,9 @@ void process_stick(int16_t* out_x, int16_t* out_y, int16_t raw_x, int16_t raw_y,
     // Smooth the Magnitude (Radius)
     float new_mag = *prev_out_mag + alpha * (target_mag - *prev_out_mag);
     
- 
     // Smooth the Angle (The sweep/roll fix)
     float new_angle = *prev_out_angle;
-    if (new_mag > 0.0f) { // Only update angle if we are actually moving
+    if (new_mag > 0.0f) { 
         new_angle = lerp_angle(*prev_out_angle, target_angle, alpha);
     }
 
