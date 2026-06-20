@@ -52,7 +52,19 @@ static void process_stick(Humanizer* h,
     *prev_y = sm_y;
 
     float mag = sqrtf(sm_x * sm_x + sm_y * sm_y);
-    float angle = (mag > 0.0001f) ? atan2f(sm_y, sm_x) : 0.0f;
+
+    // ---- CENTER FLOOR ----
+    // Below this magnitude the polar angle (atan2) is numerically unstable: a few
+    // bits of noise on a near-zero vector swing the angle wildly, and any rotation
+    // (tilt/wobble) smears that into visible hair. So near center we bypass ALL
+    // polar math and pass the clean smoothed value straight through.
+    if (mag < 1500.0f) {
+        *out_x = (int16_t)sm_x;
+        *out_y = (int16_t)sm_y;
+        return;
+    }
+
+    float angle = atan2f(sm_y, sm_x);
 
     float center_fade = mag / 2000.0f;
     if (center_fade > 1.0f) center_fade = 1.0f;
@@ -69,9 +81,8 @@ static void process_stick(Humanizer* h,
     }
 
     // ---- STEP 2: angular wobble as bounded random walk (OU) ----
-    // NOTE: theta below is the OU mean-reversion strength (how hard the walk is
-    // pulled back toward 0). It is NOT an oscillation frequency. OU noise is
-    // broadband low-pass-filtered white noise, with no single frequency peak.
+    // NOTE: theta is the OU mean-reversion strength (pull back toward 0), NOT a
+    // frequency. OU noise is broadband low-pass white noise with no single peak.
     if (deviation_level > 0) {
         float max_wobble = (deviation_level / 100.0f) * (20.0f * (M_PI / 180.0f));
         float theta = 0.06f * dt_scale;        // mean-reversion strength, not frequency
