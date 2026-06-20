@@ -7,18 +7,15 @@
 #define M_PI 3.14159265358979323846f
 #endif
 
-// reference tick the walk is tuned against; dt scaling normalizes real rate to this
 #define REF_HZ 250.0f
 
 static inline float frand(Humanizer* h) {
-    // xorshift32 -> [-1, 1)
     h->rng ^= h->rng << 13;
     h->rng ^= h->rng >> 17;
     h->rng ^= h->rng << 5;
     return ((float)(h->rng & 0xFFFFFF) / (float)0x800000) - 1.0f;
 }
 
-// cheap central-limit gaussian approx
 static inline float gauss(Humanizer* h) {
     return (frand(h) + frand(h) + frand(h)) * 0.5f;
 }
@@ -47,7 +44,7 @@ static void process_stick(Humanizer* h,
     float alpha = 1.0f;
     if (smoothing_rate > 0) {
         float base = 1.0f - (smoothing_rate / 100.0f * 0.98f);
-        alpha = 1.0f - powf(1.0f - base, dt_scale);   // timestep-aware
+        alpha = 1.0f - powf(1.0f - base, dt_scale);
     }
     float sm_x = *prev_x + alpha * ((float)raw_x - *prev_x);
     float sm_y = *prev_y + alpha * ((float)raw_y - *prev_y);
@@ -57,7 +54,6 @@ static void process_stick(Humanizer* h,
     float mag = sqrtf(sm_x * sm_x + sm_y * sm_y);
     float angle = (mag > 0.0001f) ? atan2f(sm_y, sm_x) : 0.0f;
 
-    // fade all effects to zero near center (kills +X pop at rest)
     float center_fade = mag / 2000.0f;
     if (center_fade > 1.0f) center_fade = 1.0f;
 
@@ -72,25 +68,27 @@ static void process_stick(Humanizer* h,
         if (*sig > 1.6f) *sig = 1.6f;
     }
 
-    // ---- STEP 2: angular wobble as bounded random walk (OU), not sines ----
+    // ---- STEP 2: angular wobble as bounded random walk (OU) ----
+    // NOTE: theta below is the OU mean-reversion strength (how hard the walk is
+    // pulled back toward 0). It is NOT an oscillation frequency. OU noise is
+    // broadband low-pass-filtered white noise, with no single frequency peak.
     if (deviation_level > 0) {
         float max_wobble = (deviation_level / 100.0f) * (20.0f * (M_PI / 180.0f));
-        float theta = 0.06f * dt_scale;        // mean reversion strength
+        float theta = 0.06f * dt_scale;        // mean-reversion strength, not frequency
         float sigma = 0.10f * dt_scale * (*sig);
         *wob += -theta * (*wob) + sigma * gauss(h);
         if (*wob >  1.0f) *wob =  1.0f;
         if (*wob < -1.0f) *wob = -1.0f;
 
-        // edge-lift: looser near center, tighter at full deflection
-        float looseness = 1.0f - deflection;
-        float curve = 0.25f + 0.75f * looseness;
+        // INVERTED curve: precise near center, sloppy at full deflection.
+        float curve = 0.15f + (0.85f * deflection);
         angle += (*wob) * max_wobble * curve * center_fade;
     }
 
-    // ---- wandering ergonomic tilt (slider-controlled center, proportional wander) ----
+    // ---- wandering ergonomic tilt ----
     if (tilt_deg > 0) {
-        float center_rad = -((float)tilt_deg) * (M_PI / 180.0f);   // negative = lean
-        float wander = 0.30f * fabsf(center_rad);                  // +-30% of set tilt
+        float center_rad = -((float)tilt_deg) * (M_PI / 180.0f);
+        float wander = 0.30f * fabsf(center_rad);
         float theta_b = 0.0006f * dt_scale;
         *bias += theta_b * (center_rad - *bias) + wander * dt_scale * gauss(h);
         float lo = center_rad - wander, hi = center_rad + wander;
@@ -98,7 +96,6 @@ static void process_stick(Humanizer* h,
         if (*bias > hi) *bias = hi;
         angle += (*bias) * center_fade;
     } else {
-        // tilt disabled: relax bias back toward 0 so it doesn't stick
         *bias += 0.01f * dt_scale * (0.0f - *bias);
     }
 
@@ -110,7 +107,7 @@ static void process_stick(Humanizer* h,
         if (*gate >  1.0f) *gate =  1.0f;
         if (*gate < -1.0f) *gate = -1.0f;
     }
-    float gate_amt = (gate_level / 100.0f) * 0.03f;   // up to ~3% radius wander
+    float gate_amt = (gate_level / 100.0f) * 0.03f;
     float dynamic_max_gate = AXIS_MAX * (1.0f - gate_amt * (0.5f + 0.5f * (*gate)));
 
     // ---- circularity error (static shape) ----
@@ -134,9 +131,8 @@ void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int1
                        uint16_t smoothing_rate, uint16_t gate_level,
                        uint16_t tilt_deg, uint16_t passthrough) {
 
-    if (passthrough) return;   // true raw passthrough for A/B testing
+    if (passthrough) return;
 
-    // real dt, normalized to REF_HZ so feel is rate-independent
     uint64_t now = time_us_64();
     float dt_scale = 1.0f;
     if (h->have_last) {
@@ -149,10 +145,11 @@ void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int1
     h->last_us = now;
     h->have_last = 1;
 
+    // LEFT STICK ONLY — full humanizer treatment (movement)
     process_stick(h, lx, ly, *lx, *ly, circ_error, axis_deviation, smoothing_rate, gate_level, tilt_deg,
                   dt_scale, &h->prev_x_l, &h->prev_y_l, &h->wob_l, &h->bias_l, &h->gate_l, &h->sig_l);
 
-    process_stick(h, rx, ry, *rx, *ry, circ_error, axis_deviation, smoothing_rate, gate_level, tilt_deg,
-                  dt_scale, &h->prev_x_r, &h->prev_y_r, &h->wob_r, &h->bias_r, &h->gate_r, &h->sig_r);
+    // RIGHT STICK — untouched passthrough (aim must stay pristine)
+    (void)rx;
+    (void)ry;
 }
-```
