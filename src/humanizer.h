@@ -5,15 +5,12 @@
 
 typedef struct {
     float phase_l;    
-    float prev_raw_mag_l; 
-    // POLAR MEMORY: We now store Magnitude and Angle instead of X and Y
-    float prev_out_mag_l;   
-    float prev_out_angle_l; 
+    float prev_x_l; 
+    float prev_y_l;   
     
     float phase_r;    
-    float prev_raw_mag_r; 
-    float prev_out_mag_r;   
-    float prev_out_angle_r; 
+    float prev_x_r; 
+    float prev_y_r; 
 } Humanizer;
 
 void humanizer_init(Humanizer* h);
