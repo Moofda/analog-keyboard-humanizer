@@ -48,45 +48,15 @@ static void process_stick(Humanizer* h,
                           float* prev_x, float* prev_y,
                           float* wob_p, float* wob_v, float* bias, float* gate, float* sig) {
 
-    // ---- STEP 1: Cartesian smoothing & Analog Polar Angle-Lock ----
-    float target_x = (float)raw_x;
-    float target_y = (float)raw_y;
-
-    float raw_mag = sqrtf(target_x * target_x + target_y * target_y);
-    float prev_mag = sqrtf(*prev_x * *prev_x + *prev_y * *prev_y);
-
-    // If magnitude is dropping even slightly (slow analog release), lock the angle!
-    // This irons out the jagged staircase caused by staggered analog switch fading.
-    if (raw_mag < prev_mag - 25.0f) {
-        float raw_angle = (raw_mag > 0.1f) ? atan2f(target_y, target_x) : 0.0f;
-        float prev_angle = (prev_mag > 0.1f) ? atan2f(*prev_y, *prev_x) : 0.0f;
-
-        float angle_diff = raw_angle - prev_angle;
-        // Normalize angle to find the shortest path
-        while (angle_diff > M_PI) angle_diff -= 2.0f * M_PI;
-        while (angle_diff < -M_PI) angle_diff += 2.0f * M_PI;
-
-        // Apply heavy damping to the angle ONLY. 
-        // Magnitude drops raw, ensuring zero input lag on release speed.
-        float angle_alpha = 0.10f * dt_scale;
-        if (angle_alpha > 1.0f) angle_alpha = 1.0f;
-        
-        float smoothed_angle = prev_angle + angle_alpha * angle_diff;
-        
-        // Reconstruct target Cartesian coordinates
-        target_x = raw_mag * cosf(smoothed_angle);
-        target_y = raw_mag * sinf(smoothed_angle);
-    }
-
-    // Standard Cartesian smoothing for base movement
+    // ---- STEP 1: Pure Cartesian Smoothing (Zero Lag Attack/Release) ----
     float alpha = 1.0f;
     if (smoothing_rate > 0) {
         float base = 1.0f - (smoothing_rate / 100.0f * 0.98f);
         alpha = 1.0f - powf(1.0f - base, dt_scale);
     }
 
-    float sm_x = *prev_x + alpha * (target_x - *prev_x);
-    float sm_y = *prev_y + alpha * (target_y - *prev_y);
+    float sm_x = *prev_x + alpha * ((float)raw_x - *prev_x);
+    float sm_y = *prev_y + alpha * ((float)raw_y - *prev_y);
     *prev_x = sm_x;
     *prev_y = sm_y;
 
@@ -114,6 +84,7 @@ static void process_stick(Humanizer* h,
     *wob_v += (-stiffness * (*wob_p) - damping * (*wob_v) + noise_force) * dt_scale;
     *wob_p += (*wob_v) * dt_scale;
 
+    // Soft clamp to prevent physics explosion
     if (*wob_p >  1.2f) { *wob_p =  1.2f; *wob_v *= -0.5f; }
     if (*wob_p < -1.2f) { *wob_p = -1.2f; *wob_v *= -0.5f; }
 
@@ -169,22 +140,22 @@ void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int1
     if (passthrough) return;
 
     uint64_t now = time_us_64();
-    float float_dt = 1.0f;
+    float dt_scale = 1.0f;
     if (h->have_last) {
         float dt = (float)(now - h->last_us) * 1e-6f;
         if (dt < 0.0f) dt = 0.0f;
-        float_dt = dt * REF_HZ;
-        if (float_dt > 4.0f) float_dt = 4.0f;
-        if (float_dt < 0.05f) float_dt = 0.05f;
+        dt_scale = dt * REF_HZ;
+        if (dt_scale > 4.0f) dt_scale = 4.0f;
+        if (dt_scale < 0.05f) dt_scale = 0.05f;
     }
     h->last_us = now;
     h->have_last = 1;
 
-    // LEFT STICK ONLY
+    // LEFT STICK ONLY — full humanizer treatment (movement)
     process_stick(h, lx, ly, *lx, *ly, circ_error, axis_deviation, smoothing_rate, gate_level, tilt_deg,
-                  float_dt, &h->prev_x_l, &h->prev_y_l, &h->wob_p_l, &h->wob_v_l, &h->bias_l, &h->gate_l, &h->sig_l);
+                  dt_scale, &h->prev_x_l, &h->prev_y_l, &h->wob_p_l, &h->wob_v_l, &h->bias_l, &h->gate_l, &h->sig_l);
 
-    // RIGHT STICK PASSTHROUGH
+    // RIGHT STICK — untouched passthrough (aim must stay pristine)
     (void)rx;
     (void)ry;
 }
