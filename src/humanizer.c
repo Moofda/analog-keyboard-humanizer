@@ -48,28 +48,45 @@ static void process_stick(Humanizer* h,
                           float* prev_x, float* prev_y,
                           float* wob_p, float* wob_v, float* bias, float* gate, float* sig) {
 
-    // ---- STEP 1: Cartesian smoothing & RTC (Return-To-Center) Spring Fix ----
+    // ---- STEP 1: Cartesian smoothing & Analog Polar Angle-Lock ----
+    float target_x = (float)raw_x;
+    float target_y = (float)raw_y;
+
+    float raw_mag = sqrtf(target_x * target_x + target_y * target_y);
+    float prev_mag = sqrtf(*prev_x * *prev_x + *prev_y * *prev_y);
+
+    // If magnitude is dropping even slightly (slow analog release), lock the angle!
+    // This irons out the jagged staircase caused by staggered analog switch fading.
+    if (raw_mag < prev_mag - 25.0f) {
+        float raw_angle = (raw_mag > 0.1f) ? atan2f(target_y, target_x) : 0.0f;
+        float prev_angle = (prev_mag > 0.1f) ? atan2f(*prev_y, *prev_x) : 0.0f;
+
+        float angle_diff = raw_angle - prev_angle;
+        // Normalize angle to find the shortest path
+        while (angle_diff > M_PI) angle_diff -= 2.0f * M_PI;
+        while (angle_diff < -M_PI) angle_diff += 2.0f * M_PI;
+
+        // Apply heavy damping to the angle ONLY. 
+        // Magnitude drops raw, ensuring zero input lag on release speed.
+        float angle_alpha = 0.10f * dt_scale;
+        if (angle_alpha > 1.0f) angle_alpha = 1.0f;
+        
+        float smoothed_angle = prev_angle + angle_alpha * angle_diff;
+        
+        // Reconstruct target Cartesian coordinates
+        target_x = raw_mag * cosf(smoothed_angle);
+        target_y = raw_mag * sinf(smoothed_angle);
+    }
+
+    // Standard Cartesian smoothing for base movement
     float alpha = 1.0f;
     if (smoothing_rate > 0) {
         float base = 1.0f - (smoothing_rate / 100.0f * 0.98f);
         alpha = 1.0f - powf(1.0f - base, dt_scale);
     }
 
-    // Calculate magnitudes to detect if we are releasing the stick
-    float raw_mag = sqrtf((float)raw_x * raw_x + (float)raw_y * raw_y);
-    float prev_mag = sqrtf(*prev_x * *prev_x + *prev_y * *prev_y);
-
-    // If raw magnitude drops sharply, the user is letting go of the keys
-    if (raw_mag < prev_mag - 2000.0f) {
-        // HARDWARE SPRING SIMULATION:
-        // When releasing diagonals on a keyboard, fingers stagger, causing a robotic "L-shape" snap.
-        // This forces a rapid ~12ms decay, blending the staggered key releases into a smooth diagonal swoop.
-        float spring_alpha = 1.0f - powf(0.4f, dt_scale); // 60% decay per frame
-        if (alpha > spring_alpha) alpha = spring_alpha; 
-    }
-
-    float sm_x = *prev_x + alpha * ((float)raw_x - *prev_x);
-    float sm_y = *prev_y + alpha * ((float)raw_y - *prev_y);
+    float sm_x = *prev_x + alpha * (target_x - *prev_x);
+    float sm_y = *prev_y + alpha * (target_y - *prev_y);
     *prev_x = sm_x;
     *prev_y = sm_y;
 
@@ -83,8 +100,6 @@ static void process_stick(Humanizer* h,
     if (deflection > 1.0f) deflection = 1.0f;
 
     // ---- STEP 2: THE UNIFIED PHYSICS ENGINE (Always Runs) ----
-    
-    // Non-stationary sigma: slowly wander the overall noise intensity
     {
         float theta_sig = 0.0008f * dt_scale;
         *sig += theta_sig * (1.0f - *sig) + 0.02f * dt_scale * gauss(h);
@@ -92,7 +107,6 @@ static void process_stick(Humanizer* h,
         if (*sig > 1.6f) *sig = 1.6f;
     }
 
-    // Mass-Spring-Damper (Generates the master "Organic Waves")
     float stiffness = 0.01f;  
     float damping = 0.05f;    
     float noise_force = 0.006f * gauss(h) * (*sig); 
@@ -100,7 +114,6 @@ static void process_stick(Humanizer* h,
     *wob_v += (-stiffness * (*wob_p) - damping * (*wob_v) + noise_force) * dt_scale;
     *wob_p += (*wob_v) * dt_scale;
 
-    // Soft clamp to prevent physics explosion
     if (*wob_p >  1.2f) { *wob_p =  1.2f; *wob_v *= -0.5f; }
     if (*wob_p < -1.2f) { *wob_p = -1.2f; *wob_v *= -0.5f; }
 
@@ -115,13 +128,8 @@ static void process_stick(Humanizer* h,
     if (tilt_deg > 0) {
         float center_rad = -((float)tilt_deg) * (M_PI / 180.0f);
         float max_wander = 0.30f * fabsf(center_rad);
-        
-        // Use the smooth physics position as a slow, lazy target for the tilt to follow
         float target_bias = center_rad + (*wob_p * max_wander);
-        
-        // Heavy low-pass filter makes the tilt incredibly smooth and slow
         *bias += 0.015f * dt_scale * (target_bias - *bias);
-        
         angle += (*bias) * center_fade;
     } else {
         *bias += 0.02f * dt_scale * (0.0f - *bias);
@@ -129,12 +137,9 @@ static void process_stick(Humanizer* h,
 
     // ---- STEP 5: Gate Slop (Outer Ring Wander) ----
     {
-        // Drive gate slop using the physics velocity vector (making it mathematically out of phase with tilt)
         float target_gate = (*wob_v) * 10.0f; 
         if (target_gate > 1.0f) target_gate = 1.0f;
         if (target_gate < -1.0f) target_gate = -1.0f;
-        
-        // Smooth low-pass filter
         *gate += 0.02f * dt_scale * (target_gate - *gate);
     }
     float gate_amt = (gate_level / 100.0f) * 0.03f;
@@ -164,22 +169,22 @@ void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int1
     if (passthrough) return;
 
     uint64_t now = time_us_64();
-    float dt_scale = 1.0f;
+    float float_dt = 1.0f;
     if (h->have_last) {
         float dt = (float)(now - h->last_us) * 1e-6f;
         if (dt < 0.0f) dt = 0.0f;
-        dt_scale = dt * REF_HZ;
-        if (dt_scale > 4.0f) dt_scale = 4.0f;
-        if (dt_scale < 0.05f) dt_scale = 0.05f;
+        float_dt = dt * REF_HZ;
+        if (float_dt > 4.0f) float_dt = 4.0f;
+        if (float_dt < 0.05f) float_dt = 0.05f;
     }
     h->last_us = now;
     h->have_last = 1;
 
-    // LEFT STICK ONLY — full humanizer treatment (movement)
+    // LEFT STICK ONLY
     process_stick(h, lx, ly, *lx, *ly, circ_error, axis_deviation, smoothing_rate, gate_level, tilt_deg,
-                  dt_scale, &h->prev_x_l, &h->prev_y_l, &h->wob_p_l, &h->wob_v_l, &h->bias_l, &h->gate_l, &h->sig_l);
+                  float_dt, &h->prev_x_l, &h->prev_y_l, &h->wob_p_l, &h->wob_v_l, &h->bias_l, &h->gate_l, &h->sig_l);
 
-    // RIGHT STICK — untouched passthrough (aim must stay pristine)
+    // RIGHT STICK PASSTHROUGH
     (void)rx;
     (void)ry;
 }
