@@ -48,12 +48,26 @@ static void process_stick(Humanizer* h,
                           float* prev_x, float* prev_y,
                           float* wob_p, float* wob_v, float* bias, float* gate, float* sig) {
 
-    // ---- STEP 1: Cartesian smoothing (straight lines, no slingshot) ----
+    // ---- STEP 1: Cartesian smoothing & RTC (Return-To-Center) Spring Fix ----
     float alpha = 1.0f;
     if (smoothing_rate > 0) {
         float base = 1.0f - (smoothing_rate / 100.0f * 0.98f);
         alpha = 1.0f - powf(1.0f - base, dt_scale);
     }
+
+    // Calculate magnitudes to detect if we are releasing the stick
+    float raw_mag = sqrtf((float)raw_x * raw_x + (float)raw_y * raw_y);
+    float prev_mag = sqrtf(*prev_x * *prev_x + *prev_y * *prev_y);
+
+    // If raw magnitude drops sharply, the user is letting go of the keys
+    if (raw_mag < prev_mag - 2000.0f) {
+        // HARDWARE SPRING SIMULATION:
+        // When releasing diagonals on a keyboard, fingers stagger, causing a robotic "L-shape" snap.
+        // This forces a rapid ~12ms decay, blending the staggered key releases into a smooth diagonal swoop.
+        float spring_alpha = 1.0f - powf(0.4f, dt_scale); // 60% decay per frame
+        if (alpha > spring_alpha) alpha = spring_alpha; 
+    }
+
     float sm_x = *prev_x + alpha * ((float)raw_x - *prev_x);
     float sm_y = *prev_y + alpha * ((float)raw_y - *prev_y);
     *prev_x = sm_x;
