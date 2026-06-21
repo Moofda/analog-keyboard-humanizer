@@ -7,15 +7,18 @@
 #define M_PI 3.14159265358979323846f
 #endif
 
+// reference tick the walk is tuned against; dt scaling normalizes real rate to this
 #define REF_HZ 250.0f
 
 static inline float frand(Humanizer* h) {
+    // xorshift32 -> [-1, 1)
     h->rng ^= h->rng << 13;
     h->rng ^= h->rng >> 17;
     h->rng ^= h->rng << 5;
     return ((float)(h->rng & 0xFFFFFF) / (float)0x800000) - 1.0f;
 }
 
+// cheap central-limit gaussian approx
 static inline float gauss(Humanizer* h) {
     return (frand(h) + frand(h) + frand(h)) * 0.5f;
 }
@@ -23,10 +26,15 @@ static inline float gauss(Humanizer* h) {
 void humanizer_init(Humanizer* h) {
     h->prev_x_l = h->prev_y_l = 0.0f;
     h->prev_x_r = h->prev_y_r = 0.0f;
-    h->wob_l = h->wob_r = 0.0f;
+    
+    // Initialize Physics State
+    h->wob_p_l = 0.0f; h->wob_v_l = 0.0f;
+    h->wob_p_r = 0.0f; h->wob_v_r = 0.0f;
+    
     h->bias_l = h->bias_r = 0.0f;
     h->gate_l = h->gate_r = 0.0f;
     h->sig_l = h->sig_r = 1.0f;
+    
     h->last_us = 0;
     h->have_last = 0;
     h->rng = 0xC0FFEEu;
@@ -38,7 +46,7 @@ static void process_stick(Humanizer* h,
                           uint16_t smoothing_rate, uint16_t gate_level, uint16_t tilt_deg,
                           float dt_scale,
                           float* prev_x, float* prev_y,
-                          float* wob, float* bias, float* gate, float* sig) {
+                          float* wob_p, float* wob_v, float* bias, float* gate, float* sig) {
 
     // ---- STEP 1: Cartesian smoothing (straight lines, no slingshot) ----
     float alpha = 1.0f;
@@ -52,19 +60,7 @@ static void process_stick(Humanizer* h,
     *prev_y = sm_y;
 
     float mag = sqrtf(sm_x * sm_x + sm_y * sm_y);
-
-    // ---- CENTER FLOOR ----
-    // Below this magnitude the polar angle (atan2) is numerically unstable: a few
-    // bits of noise on a near-zero vector swing the angle wildly, and any rotation
-    // (tilt/wobble) smears that into visible hair. Near center we bypass ALL polar
-    // math and pass the clean smoothed value straight through.
-    if (mag < 1500.0f) {
-        *out_x = (int16_t)sm_x;
-        *out_y = (int16_t)sm_y;
-        return;
-    }
-
-    float angle = atan2f(sm_y, sm_x);
+    float angle = (mag > 0.0001f) ? atan2f(sm_y, sm_x) : 0.0f;
 
     float center_fade = mag / 2000.0f;
     if (center_fade > 1.0f) center_fade = 1.0f;
@@ -80,39 +76,47 @@ static void process_stick(Humanizer* h,
         if (*sig > 1.6f) *sig = 1.6f;
     }
 
-    // ---- STEP 2: angular wobble as bounded random walk (OU) ----
-    // theta is OU mean-reversion strength (pull toward 0), NOT a frequency.
+    // ---- STEP 2: The "Organic Wave" (Stochastic Damped Oscillator) ----
     if (deviation_level > 0) {
         float max_wobble = (deviation_level / 100.0f) * (20.0f * (M_PI / 180.0f));
-        float theta = 0.06f * dt_scale;
-        float sigma = 0.10f * dt_scale * (*sig);
-        *wob += -theta * (*wob) + sigma * gauss(h);
-        if (*wob >  1.0f) *wob =  1.0f;
-        if (*wob < -1.0f) *wob = -1.0f;
+        
+        // Mass-Spring-Damper Physics
+        float stiffness = 0.01f;  // Determines the frequency/speed of the waves
+        float damping = 0.05f;    // Smoothes out the jitter into rolling curves
+        float noise_force = 0.006f * gauss(h) * (*sig); // The random wind pushing the thumb
 
-        // INVERTED curve: precise near center, sloppy at full deflection.
+        // Update velocity, then update position
+        *wob_v += (-stiffness * (*wob_p) - damping * (*wob_v) + noise_force) * dt_scale;
+        *wob_p += (*wob_v) * dt_scale;
+
+        // Soft clamp to prevent physics explosion from edge cases
+        if (*wob_p >  1.2f) { *wob_p =  1.2f; *wob_v *= -0.5f; }
+        if (*wob_p < -1.2f) { *wob_p = -1.2f; *wob_v *= -0.5f; }
+
+        // INVERTED curve: precise near center, gracefully sloppy at full deflection.
         float curve = 0.15f + (0.85f * deflection);
-        angle += (*wob) * max_wobble * curve * center_fade;
+        angle += (*wob_p) * max_wobble * curve * center_fade;
     }
 
-    // ---- wandering ergonomic tilt (slow drift, not per-tick jitter) ----
+    // ---- wandering ergonomic tilt ----
     if (tilt_deg > 0) {
         float center_rad = -((float)tilt_deg) * (M_PI / 180.0f);
         float wander = 0.30f * fabsf(center_rad);
-        float theta_b = 0.002f * dt_scale;
-        *bias += theta_b * (center_rad - *bias) + (wander * 0.01f) * dt_scale * gauss(h);
+        float theta_b = 0.0006f * dt_scale;
+        *bias += theta_b * (center_rad - *bias) + wander * dt_scale * gauss(h);
         float lo = center_rad - wander, hi = center_rad + wander;
         if (*bias < lo) *bias = lo;
         if (*bias > hi) *bias = hi;
-        angle += (*bias);
+        angle += (*bias) * center_fade;
     } else {
         *bias += 0.01f * dt_scale * (0.0f - *bias);
     }
 
     // ---- gate as bounded random walk on outer radius (hall-effect rim slop) ----
     {
+        // Lowered the sigma slightly from Claude's version to make outer gate visually smoother
         float theta_g = 0.02f * dt_scale;
-        float sigma_g = 0.015f * dt_scale * (*sig);
+        float sigma_g = 0.008f * dt_scale * (*sig); 
         *gate += -theta_g * (*gate) + sigma_g * gauss(h);
         if (*gate >  1.0f) *gate =  1.0f;
         if (*gate < -1.0f) *gate = -1.0f;
@@ -157,7 +161,7 @@ void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int1
 
     // LEFT STICK ONLY — full humanizer treatment (movement)
     process_stick(h, lx, ly, *lx, *ly, circ_error, axis_deviation, smoothing_rate, gate_level, tilt_deg,
-                  dt_scale, &h->prev_x_l, &h->prev_y_l, &h->wob_l, &h->bias_l, &h->gate_l, &h->sig_l);
+                  dt_scale, &h->prev_x_l, &h->prev_y_l, &h->wob_p_l, &h->wob_v_l, &h->bias_l, &h->gate_l, &h->sig_l);
 
     // RIGHT STICK — untouched passthrough (aim must stay pristine)
     (void)rx;
