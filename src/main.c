@@ -92,10 +92,13 @@ void process_web_serial_commands(void) {
         char buffer[64];
         uint32_t count = tud_cdc_read(buffer, sizeof(buffer) - 1);
         buffer[count] = '\0'; 
-        if (strncmp(buffer, "SET:", 4) == 0) {
+        
+        // --- 1. INSTANT RAM UPDATE (No Reboot) ---
+        if (strncmp(buffer, "LIVE:", 5) == 0) {
             int c, jm, ji, jo, s, g, t, l, df, ad, p;
-            if (sscanf(buffer, "SET:%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", 
+            if (sscanf(buffer, "LIVE:%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", 
                        &c, &jm, &ji, &jo, &s, &g, &t, &l, &df, &ad, &p) == 11) {
+                // Update the active configuration in RAM instantly
                 active_config.circ_error     = (uint16_t)c;
                 active_config.jitter_mag     = (uint16_t)jm;
                 active_config.jitter_inner   = (uint16_t)ji;
@@ -107,14 +110,18 @@ void process_web_serial_commands(void) {
                 active_config.diagonal_feel  = (uint16_t)df;
                 active_config.anti_deadzone  = (uint16_t)ad;
                 active_config.passthrough    = (uint16_t)p;
-                tud_cdc_write_str("DATA_RECEIVED_AWAITING_LOCK\r\n");
-                tud_cdc_write_flush();
-                pending_save_and_reboot = true;
-                save_trigger_time = to_ms_since_boot(get_absolute_time());
             }
+        }
+        // --- 2. PERMANENT FLASH COMMIT (Triggers Reboot) ---
+        else if (strncmp(buffer, "SAVE", 4) == 0) {
+            tud_cdc_write_str("COMMITTING_TO_FLASH\r\n");
+            tud_cdc_write_flush();
+            pending_save_and_reboot = true;
+            save_trigger_time = to_ms_since_boot(get_absolute_time());
         }
     }
 }
+
 
 void core1_main(void) {
     gpio_init(USB_HOST_PWR_PIN);
