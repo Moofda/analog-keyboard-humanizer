@@ -43,6 +43,7 @@ target_compile_definitions(analog_keyboard_humanizer PRIVATE
 
 target_link_libraries(analog_keyboard_humanizer PRIVATE
     pico_stdlib
+    hardware_adc
     pico_multicore
     hardware_pio
     hardware_dma
