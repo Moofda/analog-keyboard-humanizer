@@ -5,6 +5,10 @@
 #define M_PI 3.14159265358979323846f
 #endif
 
+#ifndef TWO_PI
+#define TWO_PI (2.0f * (float)M_PI)
+#endif
+
 void humanizer_init(Humanizer* h) {
     h->wobble_phase = 0.0f;
     h->tilt_phase = 0.0f;
@@ -112,10 +116,15 @@ void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int1
     
     if (passthrough) return; // Killswitch
 
-    // Advance oscillators
-    h->wobble_phase += 0.4f; // Fast thumb shake
-    h->tilt_phase   += 0.01f; // Slow breathing lean
-    h->gate_phase   += 0.05f; // Medium plastic flex
+    // Advance oscillators and wrap them to prevent float precision death
+    h->wobble_phase += 0.4f; 
+    if (h->wobble_phase > TWO_PI) h->wobble_phase -= TWO_PI;
+
+    h->tilt_phase   += 0.01f; 
+    if (h->tilt_phase > TWO_PI) h->tilt_phase -= TWO_PI;
+
+    h->gate_phase   += 0.05f; 
+    if (h->gate_phase > TWO_PI) h->gate_phase -= TWO_PI;
 
     // Process Left Stick
     process_stick(h, lx, ly, &h->ema_lx, &h->ema_ly, &h->was_active_l, &h->land_offset_l,
