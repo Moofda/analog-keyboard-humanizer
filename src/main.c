@@ -26,17 +26,18 @@ bool tud_in_config_mode(void);
 #define FLASH_MAGIC_KEY 0x48554D50   
 #define FLASH_TARGET_OFFSET (1024 * 1024) 
 
-// --- UPDATED 9-SLIDER VAULT ---
+// --- UPDATED 10-SLIDER VAULT ---
 typedef struct {
     uint32_t magic;           
     uint16_t circ_error;      
-    uint16_t jitter_mag;      // 3-Part Wobble: Master Vol
-    uint16_t jitter_inner;    // 3-Part Wobble: Center %
-    uint16_t jitter_outer;    // 3-Part Wobble: Edge %
+    uint16_t jitter_mag;      
+    uint16_t jitter_inner;    
+    uint16_t jitter_outer;    
     uint16_t smoothing_rate;  
     uint16_t gate_level;      
     uint16_t tilt_deg;        
-    uint16_t landing_var;     // Dice roll offset
+    uint16_t landing_var;     
+    uint16_t diagonal_feel;   // NEW: Axis Coupling
     uint16_t passthrough;     
 } humanizer_config_t;
 
@@ -68,10 +69,11 @@ void load_settings_from_flash(void) {
         active_config.jitter_mag     = 50;    
         active_config.jitter_inner   = 15; 
         active_config.jitter_outer   = 100;
-        active_config.smoothing_rate = 0; 
+        active_config.smoothing_rate = 20; 
         active_config.gate_level     = 0;
         active_config.tilt_deg       = 5;   
         active_config.landing_var    = 50;
+        active_config.diagonal_feel  = 15; // Default middle-ground coupling
         active_config.passthrough    = 0;
     }
 }
@@ -92,13 +94,15 @@ void process_web_serial_commands(void) {
     if (tud_cdc_available()) {
         char buffer[64];
         uint32_t count = tud_cdc_read(buffer, sizeof(buffer) - 1);
+        
+        // Security Patch: Prevent sscanf from overflowing into RAM
         buffer[count] = '\0'; 
         
-        // Catch all 9 variables from the updated Web UI
+        // Catch 10 variables (Added 'df' for Diagonal Feel)
         if (strncmp(buffer, "SET:", 4) == 0) {
-            int c, jm, ji, jo, s, g, t, l, p;
-            if (sscanf(buffer, "SET:%d,%d,%d,%d,%d,%d,%d,%d,%d", 
-                       &c, &jm, &ji, &jo, &s, &g, &t, &l, &p) == 9) {
+            int c, jm, ji, jo, s, g, t, l, df, p;
+            if (sscanf(buffer, "SET:%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", 
+                       &c, &jm, &ji, &jo, &s, &g, &t, &l, &df, &p) == 10) {
                 
                 active_config.circ_error     = (uint16_t)c;
                 active_config.jitter_mag     = (uint16_t)jm;
@@ -108,6 +112,7 @@ void process_web_serial_commands(void) {
                 active_config.gate_level     = (uint16_t)g;
                 active_config.tilt_deg       = (uint16_t)t;
                 active_config.landing_var    = (uint16_t)l;
+                active_config.diagonal_feel  = (uint16_t)df;
                 active_config.passthrough    = (uint16_t)p;
                 
                 tud_cdc_write_str("DATA_RECEIVED_AWAITING_LOCK\r\n");
@@ -134,7 +139,6 @@ void core1_main(void) {
         tuh_task();
         uint32_t now = to_ms_since_boot(get_absolute_time());
         
-        // Safely check buttons for the reset combo
         uint32_t ints = save_and_disable_interrupts();
         uint16_t btns = latest_buttons;
         restore_interrupts(ints);
@@ -174,12 +178,10 @@ void tuh_xinput_umount_cb(uint8_t dev_addr, uint8_t instance) {
     combo_start_time = 0;
 }
 
-// DROPS DATA INTO MAILBOX - DOES NOT PROCESS MATH
 void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_interface_t const* xid_itf, uint16_t len) {
     (void)dev_addr; (void)instance; (void)len;
     const xinput_gamepad_t* p = &xid_itf->pad;
     
-    // Safely write to mailbox so the 250Hz loop can read it securely
     uint32_t ints = save_and_disable_interrupts();
     latest_buttons = p->wButtons;
     raw_lx = p->sThumbLX;
@@ -199,7 +201,7 @@ int main(void) {
     
     stdio_init_all();
     
-    // --- THE BUG FIX: Seed the RNG so every boot has a uniquely randomized dice roll ---
+    // Seed RNG
     srand(time_us_32());
 
     load_settings_from_flash();
@@ -217,7 +219,6 @@ int main(void) {
         multicore_launch_core1(core1_main);
     }
 
-    // Initialize the clock for our pacing loop
     last_math_tick_us = time_us_32();
     
     while (true) {
@@ -234,14 +235,11 @@ int main(void) {
                 }
             }
         } else {
-            // --- THE PRECISION 250Hz PACED LOOP ---
             uint32_t current_time_us = time_us_32();
             
             if (current_time_us - last_math_tick_us >= 4000) {
-                // Accumulate strictly to prevent microsecond drift
                 last_math_tick_us += 4000;
 
-                // 1. Safely read from mailbox to prevent cross-core tearing
                 uint32_t ints = save_and_disable_interrupts();
                 int16_t lx = raw_lx;
                 int16_t ly = raw_ly;
@@ -252,15 +250,15 @@ int main(void) {
                 uint16_t btns = latest_buttons;
                 restore_interrupts(ints);
 
-                // 2. Process the Bounded Random Walk Math with the new 9-variable loop
+                // Added active_config.diagonal_feel to the chain
                 humanizer_process(&humanizer, &lx, &ly, &rx, &ry,
                                   active_config.circ_error, 
                                   active_config.jitter_mag, active_config.jitter_inner, active_config.jitter_outer,
                                   active_config.smoothing_rate, active_config.gate_level,
                                   active_config.tilt_deg, active_config.landing_var, 
+                                  active_config.diagonal_feel, 
                                   active_config.passthrough);
 
-                // 3. Pack the final report
                 current_report[0]  = 0x00;
                 current_report[1]  = 0x14;
                 current_report[2]  = btns & 0xFF;
@@ -276,7 +274,6 @@ int main(void) {
                 current_report[12] = ry & 0xFF;
                 current_report[13] = (ry >> 8) & 0xFF;
 
-                // Fire the USB report
                 tud_xinput_send_report(current_report, sizeof(current_report));
             }
         }
