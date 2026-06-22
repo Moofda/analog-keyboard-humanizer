@@ -119,6 +119,14 @@ void process_web_serial_commands(void) {
             pending_save_and_reboot = true;
             save_trigger_time = to_ms_since_boot(get_absolute_time());
         }
+        // --- 3. EXIT CONFIG MODE (Triggers Reboot) ---
+        else if (strncmp(buffer, "EXIT", 4) == 0) {
+            tud_cdc_write_str("EXITING_CONFIG_MODE\r\n");
+            tud_cdc_write_flush();
+            watchdog_hw->scratch[0] = 0; // Clear the magic number
+            watchdog_reboot(0, 0, 10);   // Reboot into normal mode
+            while(1);
+        }
     }
 }
 
