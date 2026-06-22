@@ -59,7 +59,7 @@ static void process_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y, float*
 
         // 4. Dynamic Wobble (The 3-Slider Curve)
         if (jitter_mag > 0) {
-            float max_wobble = (jitter_mag / 100.0f) * (15.0f * (M_PI / 180.0f));
+            float max_wobble = (jitter_mag / 100.0f) * (6.0f * (M_PI / 180.0f));
             float inner = jitter_inner / 100.0f;
             float outer = jitter_outer / 100.0f;
             
