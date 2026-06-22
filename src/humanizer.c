@@ -77,7 +77,16 @@ static void process_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
 
     // Only apply complex math if the stick is actually being pushed
     if (mag > 0.01f) {
-        float deflection = (mag > 1.0f) ? 1.0f : mag; // 0.0 to 1.0
+        
+        // --- THE BUG FIX: The Virtual Plastic Ring ---
+        // Analog keyboards output a square (mag = 1.414 in the corners).
+        // Real gamepads are physically gated to a circle (mag = 1.0).
+        // Force the raw input into a perfect physical circle first.
+        if (mag > 1.0f) {
+            mag = 1.0f; 
+        }
+
+        float deflection = mag; // Now safely clamped to a 0.0 - 1.0 scale
 
         // 3. Landing Variation (Per-Press Dice Roll)
         if (landing_var > 0) {
@@ -108,7 +117,8 @@ static void process_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
 
         // 6. Circularity Error (Hardware Calibration Flaw)
         if (circ_error > 0) {
-            float circ = 1.0f + ((circ_error / 50.0f) * 0.15f * fabsf(sinf(angle * 4.0f))); 
+            // Upgraded math: Perfectly pushes the 45-degree diagonals out toward a square
+            float circ = 1.0f + ((circ_error / 50.0f) * 0.414f * fabsf(sinf(angle * 2.0f))); 
             mag = mag * circ;
         }
 
@@ -129,7 +139,7 @@ static void process_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         *land_offset = 0.0f;
     }
 
-    // Clamp and output
+    // Clamp and output (Safety net for integer conversion)
     if (x > 1.0f) x = 1.0f; if (x < -1.0f) x = -1.0f;
     if (y > 1.0f) y = 1.0f; if (y < -1.0f) y = -1.0f;
 
