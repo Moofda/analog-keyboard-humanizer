@@ -198,6 +198,10 @@ int main(void) {
     watchdog_start_tick(12); 
     
     stdio_init_all();
+    
+    // --- THE BUG FIX: Seed the RNG so every boot has a uniquely randomized dice roll ---
+    srand(time_us_32());
+
     load_settings_from_flash();
     humanizer_init(&humanizer);
     
