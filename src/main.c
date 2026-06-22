@@ -26,13 +26,17 @@ bool tud_in_config_mode(void);
 #define FLASH_MAGIC_KEY 0x48554D50   
 #define FLASH_TARGET_OFFSET (1024 * 1024) 
 
+// --- UPDATED 9-SLIDER VAULT ---
 typedef struct {
     uint32_t magic;           
     uint16_t circ_error;      
-    uint16_t jitter_level;    
+    uint16_t jitter_mag;      // 3-Part Wobble: Master Vol
+    uint16_t jitter_inner;    // 3-Part Wobble: Center %
+    uint16_t jitter_outer;    // 3-Part Wobble: Edge %
     uint16_t smoothing_rate;  
     uint16_t gate_level;      
     uint16_t tilt_deg;        
+    uint16_t landing_var;     // Dice roll offset
     uint16_t passthrough;     
 } humanizer_config_t;
 
@@ -58,12 +62,16 @@ void load_settings_from_flash(void) {
     if (flash_profile->magic == FLASH_MAGIC_KEY) {
         memcpy(&active_config, flash_profile, sizeof(humanizer_config_t));
     } else {
+        // Default settings if memory is wiped
         active_config.magic = FLASH_MAGIC_KEY;
         active_config.circ_error     = 3; 
-        active_config.jitter_level   = 0;    
+        active_config.jitter_mag     = 50;    
+        active_config.jitter_inner   = 15; 
+        active_config.jitter_outer   = 100;
         active_config.smoothing_rate = 0; 
         active_config.gate_level     = 0;
         active_config.tilt_deg       = 5;   
+        active_config.landing_var    = 50;
         active_config.passthrough    = 0;
     }
 }
@@ -85,14 +93,21 @@ void process_web_serial_commands(void) {
         char buffer[64];
         uint32_t count = tud_cdc_read(buffer, sizeof(buffer) - 1);
         buffer[count] = '\0'; 
+        
+        // Catch all 9 variables from the updated Web UI
         if (strncmp(buffer, "SET:", 4) == 0) {
-            int c, j, s, g, t, p;
-            if (sscanf(buffer, "SET:%d,%d,%d,%d,%d,%d", &c, &j, &s, &g, &t, &p) == 6) {
+            int c, jm, ji, jo, s, g, t, l, p;
+            if (sscanf(buffer, "SET:%d,%d,%d,%d,%d,%d,%d,%d,%d", 
+                       &c, &jm, &ji, &jo, &s, &g, &t, &l, &p) == 9) {
+                
                 active_config.circ_error     = (uint16_t)c;
-                active_config.jitter_level   = (uint16_t)j;
+                active_config.jitter_mag     = (uint16_t)jm;
+                active_config.jitter_inner   = (uint16_t)ji;
+                active_config.jitter_outer   = (uint16_t)jo;
                 active_config.smoothing_rate = (uint16_t)s;
                 active_config.gate_level     = (uint16_t)g;
                 active_config.tilt_deg       = (uint16_t)t;
+                active_config.landing_var    = (uint16_t)l;
                 active_config.passthrough    = (uint16_t)p;
                 
                 tud_cdc_write_str("DATA_RECEIVED_AWAITING_LOCK\r\n");
@@ -219,7 +234,7 @@ int main(void) {
             uint32_t current_time_us = time_us_32();
             
             if (current_time_us - last_math_tick_us >= 4000) {
-                // FIXED: Accumulate strictly to prevent microsecond drift
+                // Accumulate strictly to prevent microsecond drift
                 last_math_tick_us += 4000;
 
                 // 1. Safely read from mailbox to prevent cross-core tearing
@@ -233,11 +248,13 @@ int main(void) {
                 uint16_t btns = latest_buttons;
                 restore_interrupts(ints);
 
-                // 2. Process the Bounded Random Walk Math
+                // 2. Process the Bounded Random Walk Math with the new 9-variable loop
                 humanizer_process(&humanizer, &lx, &ly, &rx, &ry,
-                                  active_config.circ_error, active_config.jitter_level,
+                                  active_config.circ_error, 
+                                  active_config.jitter_mag, active_config.jitter_inner, active_config.jitter_outer,
                                   active_config.smoothing_rate, active_config.gate_level,
-                                  active_config.tilt_deg, active_config.passthrough);
+                                  active_config.tilt_deg, active_config.landing_var, 
+                                  active_config.passthrough);
 
                 // 3. Pack the final report
                 current_report[0]  = 0x00;
@@ -255,8 +272,7 @@ int main(void) {
                 current_report[12] = ry & 0xFF;
                 current_report[13] = (ry >> 8) & 0xFF;
 
-                // FIXED: Removed the compile-breaking tud_xinput_ready wrapper.
-                // tud_xinput_send_report inherently checks endpoint readiness inside the library.
+                // Fire the USB report
                 tud_xinput_send_report(current_report, sizeof(current_report));
             }
         }
