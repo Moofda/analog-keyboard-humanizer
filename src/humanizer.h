@@ -2,39 +2,36 @@
 #define HUMANIZER_H
 
 #include <stdint.h>
+#include <stdbool.h>
+#include <math.h>
 
+// Struct to hold stateful memory for the physics engine
 typedef struct {
-    // smoothing state
-    float prev_x_l, prev_y_l;
-    float prev_x_r, prev_y_r;
-
-    // Physics Oscillator State (Position AND Velocity) for the "Organic Wave"
-    float wob_p_l, wob_v_l;
-    float wob_p_r, wob_v_r;
+    // Oscillators for organic breathing
+    float wobble_phase;
+    float tilt_phase;
+    float gate_phase;
     
-    // OU bias state — the slowly wandering "hand bias"
-    float bias_l, bias_r;
-    
-    // gate random-walk state, per stick
-    float gate_l, gate_r;
-    
-    // non-stationary modulation: slowly drifting sigma scaler per stick
-    float sig_l, sig_r;
+    // EMA (Exponential Moving Average) Smoothing state
+    float ema_lx, ema_ly;
+    float ema_rx, ema_ry;
 
-    // timing
-    uint64_t last_us;
-    int      have_last;
-
-    // rng
-    uint32_t rng;
+    // Landing Hysteresis (Dice Roll) state
+    bool was_active_l;
+    float land_offset_l;
+    
+    bool was_active_r;
+    float land_offset_r;
 } Humanizer;
 
+// Initialize the engine memory
 void humanizer_init(Humanizer* h);
 
-// passthrough != 0 bypasses ALL processing (raw passthrough for A/B testing)
+// The core physics loop
 void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int16_t* ry,
-                       uint16_t circ_error, uint16_t axis_deviation,
+                       uint16_t circ_error, 
+                       uint16_t jitter_mag, uint16_t jitter_inner, uint16_t jitter_outer, 
                        uint16_t smoothing_rate, uint16_t gate_level,
-                       uint16_t tilt_deg, uint16_t passthrough);
+                       uint16_t tilt_deg, uint16_t landing_var, uint16_t passthrough);
 
-#endif
+#endif // HUMANIZER_H
