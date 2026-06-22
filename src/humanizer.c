@@ -1,161 +1,118 @@
 #include "humanizer.h"
-#include <math.h>
-#include "pico/time.h"
+#include <stdlib.h>
 
-#define AXIS_MAX 32767.0f
 #ifndef M_PI
 #define M_PI 3.14159265358979323846f
 #endif
 
-// reference tick the walk is tuned against; dt scaling normalizes real rate to this
-#define REF_HZ 250.0f
-
-static inline float frand(Humanizer* h) {
-    // xorshift32 -> [-1, 1)
-    h->rng ^= h->rng << 13;
-    h->rng ^= h->rng >> 17;
-    h->rng ^= h->rng << 5;
-    return ((float)(h->rng & 0xFFFFFF) / (float)0x800000) - 1.0f;
-}
-
-// cheap central-limit gaussian approx
-static inline float gauss(Humanizer* h) {
-    return (frand(h) + frand(h) + frand(h)) * 0.5f;
-}
-
 void humanizer_init(Humanizer* h) {
-    h->prev_x_l = h->prev_y_l = 0.0f;
-    h->prev_x_r = h->prev_y_r = 0.0f;
+    h->wobble_phase = 0.0f;
+    h->tilt_phase = 0.0f;
+    h->gate_phase = 0.0f;
     
-    // Initialize Physics State
-    h->wob_p_l = 0.0f; h->wob_v_l = 0.0f;
-    h->wob_p_r = 0.0f; h->wob_v_r = 0.0f;
+    h->ema_lx = 0.0f; h->ema_ly = 0.0f;
+    h->ema_rx = 0.0f; h->ema_ry = 0.0f;
     
-    h->bias_l = h->bias_r = 0.0f;
-    h->gate_l = h->gate_r = 0.0f;
-    h->sig_l = h->sig_r = 1.0f;
-    
-    h->last_us = 0;
-    h->have_last = 0;
-    h->rng = 0xC0FFEEu;
+    h->was_active_l = false; h->land_offset_l = 0.0f;
+    h->was_active_r = false; h->land_offset_r = 0.0f;
 }
 
-static void process_stick(Humanizer* h,
-                          int16_t* out_x, int16_t* out_y, int16_t raw_x, int16_t raw_y,
-                          uint16_t error_pct, uint16_t deviation_level,
-                          uint16_t smoothing_rate, uint16_t gate_level, uint16_t tilt_deg,
-                          float dt_scale,
-                          float* prev_x, float* prev_y,
-                          float* wob_p, float* wob_v, float* bias, float* gate, float* sig) {
+// Helper to process a single stick to avoid repeating code
+static void process_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y, float* ema_x, float* ema_y, 
+                          bool* was_active, float* land_offset,
+                          uint16_t circ_error, uint16_t jitter_mag, uint16_t jitter_inner, uint16_t jitter_outer, 
+                          uint16_t smoothing_rate, uint16_t gate_level, uint16_t tilt_deg, uint16_t landing_var) {
+    
+    // 1. Cartesian Smoothing (EMA) - Fixes the keyboard release "staircase"
+    float alpha = 1.0f - (smoothing_rate * 0.009f); // 0 = Instant (1.0), 100 = Heavy smooth (0.1)
+    if (alpha < 0.1f) alpha = 0.1f;
+    
+    *ema_x = (alpha * (float)(*axis_x)) + ((1.0f - alpha) * (*ema_x));
+    *ema_y = (alpha * (float)(*axis_y)) + ((1.0f - alpha) * (*ema_y));
+    
+    float x = *ema_x / 32767.0f;
+    float y = *ema_y / 32767.0f;
 
-    // ---- STEP 1: Pure Cartesian Smoothing (Zero Lag Attack/Release) ----
-    float alpha = 1.0f;
-    if (smoothing_rate > 0) {
-        float base = 1.0f - (smoothing_rate / 100.0f * 0.98f);
-        alpha = 1.0f - powf(1.0f - base, dt_scale);
-    }
+    float mag = sqrtf(x*x + y*y);
+    float angle = atan2f(y, x);
 
-    float sm_x = *prev_x + alpha * ((float)raw_x - *prev_x);
-    float sm_y = *prev_y + alpha * ((float)raw_y - *prev_y);
-    *prev_x = sm_x;
-    *prev_y = sm_y;
+    // Only apply complex math if the stick is actually being pushed
+    if (mag > 0.01f) {
+        float deflection = (mag > 1.0f) ? 1.0f : mag; // 0.0 to 1.0
 
-    float mag = sqrtf(sm_x * sm_x + sm_y * sm_y);
-    float angle = (mag > 0.0001f) ? atan2f(sm_y, sm_x) : 0.0f;
+        // 2. Landing Variation (Per-Press Dice Roll)
+        if (landing_var > 0) {
+            if (!(*was_active) && mag > 0.05f) { // Engagement threshold
+                *land_offset = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f; // -1.0 to 1.0
+                *was_active = true;
+            }
+            float land_deg_max = (landing_var / 100.0f) * 6.0f; 
+            float land_rad = (*land_offset) * (land_deg_max * (float)M_PI / 180.0f);
+            angle += land_rad; // Apply the crooked dice roll
+        }
+        
+        // 3. Ergonomic Tilt (Wandering baseline)
+        if (tilt_deg > 0) {
+            float tilt_max = (tilt_deg / 100.0f) * 15.0f * (M_PI / 180.0f);
+            angle += sinf(h->tilt_phase) * tilt_max;
+        }
 
-    float center_fade = mag / 2000.0f;
-    if (center_fade > 1.0f) center_fade = 1.0f;
+        // 4. Dynamic Wobble (The 3-Slider Curve)
+        if (jitter_mag > 0) {
+            float max_wobble = (jitter_mag / 100.0f) * (15.0f * (M_PI / 180.0f));
+            float inner = jitter_inner / 100.0f;
+            float outer = jitter_outer / 100.0f;
+            
+            // Linear interpolation curve based on stick deflection
+            float curve = inner + (outer - inner) * deflection; 
+            
+            // Apply wobble scaled by the dynamic curve
+            angle += sinf(h->wobble_phase) * max_wobble * curve;
+        }
 
-    float deflection = mag / AXIS_MAX;
-    if (deflection > 1.0f) deflection = 1.0f;
+        // 5. Gate Slop & Circularity Error
+        if (gate_level > 0 || circ_error > 0) {
+            float slop = (gate_level / 100.0f) * 0.05f * sinf(h->gate_phase);
+            float circ = 1.0f + ((circ_error / 50.0f) * 0.15f * fabs(sinf(angle * 4.0f))); // Squares the circle slightly
+            mag = mag * circ + slop;
+        }
 
-    // ---- STEP 2: THE UNIFIED PHYSICS ENGINE (Always Runs) ----
-    {
-        float theta_sig = 0.0008f * dt_scale;
-        *sig += theta_sig * (1.0f - *sig) + 0.02f * dt_scale * gauss(h);
-        if (*sig < 0.5f) *sig = 0.5f;
-        if (*sig > 1.6f) *sig = 1.6f;
-    }
-
-    float stiffness = 0.01f;  
-    float damping = 0.05f;    
-    float noise_force = 0.006f * gauss(h) * (*sig); 
-
-    *wob_v += (-stiffness * (*wob_p) - damping * (*wob_v) + noise_force) * dt_scale;
-    *wob_p += (*wob_v) * dt_scale;
-
-    // Soft clamp to prevent physics explosion
-    if (*wob_p >  1.2f) { *wob_p =  1.2f; *wob_v *= -0.5f; }
-    if (*wob_p < -1.2f) { *wob_p = -1.2f; *wob_v *= -0.5f; }
-
-    // ---- STEP 3: Apply Axis Deviation (Wobble) ----
-    if (deviation_level > 0) {
-        float max_wobble = (deviation_level / 100.0f) * (20.0f * (M_PI / 180.0f));
-        float curve = 0.15f + (0.85f * deflection);
-        angle += (*wob_p) * max_wobble * curve * center_fade;
-    }
-
-    // ---- STEP 4: Ergonomic Tilt (Wandering Baseline) ----
-    if (tilt_deg > 0) {
-        float center_rad = -((float)tilt_deg) * (M_PI / 180.0f);
-        float max_wander = 0.30f * fabsf(center_rad);
-        float target_bias = center_rad + (*wob_p * max_wander);
-        *bias += 0.015f * dt_scale * (target_bias - *bias);
-        angle += (*bias) * center_fade;
+        // Convert back to cartesian
+        x = cosf(angle) * mag;
+        y = sinf(angle) * mag;
     } else {
-        *bias += 0.02f * dt_scale * (0.0f - *bias);
+        *was_active = false;
+        *land_offset = 0.0f;
     }
 
-    // ---- STEP 5: Gate Slop (Outer Ring Wander) ----
-    {
-        float target_gate = (*wob_v) * 10.0f; 
-        if (target_gate > 1.0f) target_gate = 1.0f;
-        if (target_gate < -1.0f) target_gate = -1.0f;
-        *gate += 0.02f * dt_scale * (target_gate - *gate);
-    }
-    float gate_amt = (gate_level / 100.0f) * 0.03f;
-    float dynamic_max_gate = AXIS_MAX * (1.0f - gate_amt * (0.5f + 0.5f * (*gate)));
+    // Clamp and output
+    if (x > 1.0f) x = 1.0f; if (x < -1.0f) x = -1.0f;
+    if (y > 1.0f) y = 1.0f; if (y < -1.0f) y = -1.0f;
 
-    // ---- STEP 6: Circularity Error ----
-    float limit = dynamic_max_gate * (1.0f + (error_pct / 100.0f));
-    if (mag > limit) mag = limit;
-
-    // ---- STEP 7: Back to Cartesian ----
-    float final_x = mag * cosf(angle);
-    float final_y = mag * sinf(angle);
-    if (final_x >  AXIS_MAX) final_x =  AXIS_MAX;
-    if (final_x < -AXIS_MAX) final_x = -AXIS_MAX;
-    if (final_y >  AXIS_MAX) final_y =  AXIS_MAX;
-    if (final_y < -AXIS_MAX) final_y = -AXIS_MAX;
-
-    *out_x = (int16_t)final_x;
-    *out_y = (int16_t)final_y;
+    *axis_x = (int16_t)(x * 32767.0f);
+    *axis_y = (int16_t)(y * 32767.0f);
 }
 
 void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int16_t* ry,
-                       uint16_t circ_error, uint16_t axis_deviation,
+                       uint16_t circ_error, 
+                       uint16_t jitter_mag, uint16_t jitter_inner, uint16_t jitter_outer, 
                        uint16_t smoothing_rate, uint16_t gate_level,
-                       uint16_t tilt_deg, uint16_t passthrough) {
+                       uint16_t tilt_deg, uint16_t landing_var, uint16_t passthrough) {
+    
+    if (passthrough) return; // Killswitch
 
-    if (passthrough) return;
+    // Advance oscillators
+    h->wobble_phase += 0.4f; // Fast thumb shake
+    h->tilt_phase   += 0.01f; // Slow breathing lean
+    h->gate_phase   += 0.05f; // Medium plastic flex
 
-    uint64_t now = time_us_64();
-    float dt_scale = 1.0f;
-    if (h->have_last) {
-        float dt = (float)(now - h->last_us) * 1e-6f;
-        if (dt < 0.0f) dt = 0.0f;
-        dt_scale = dt * REF_HZ;
-        if (dt_scale > 4.0f) dt_scale = 4.0f;
-        if (dt_scale < 0.05f) dt_scale = 0.05f;
-    }
-    h->last_us = now;
-    h->have_last = 1;
+    // Process Left Stick
+    process_stick(h, lx, ly, &h->ema_lx, &h->ema_ly, &h->was_active_l, &h->land_offset_l,
+                  circ_error, jitter_mag, jitter_inner, jitter_outer, 
+                  smoothing_rate, gate_level, tilt_deg, landing_var);
 
-    // LEFT STICK ONLY — full humanizer treatment (movement)
-    process_stick(h, lx, ly, *lx, *ly, circ_error, axis_deviation, smoothing_rate, gate_level, tilt_deg,
-                  dt_scale, &h->prev_x_l, &h->prev_y_l, &h->wob_p_l, &h->wob_v_l, &h->bias_l, &h->gate_l, &h->sig_l);
-
-    // RIGHT STICK — untouched passthrough (aim must stay pristine)
-    (void)rx;
-    (void)ry;
+    // Process Right Stick (optional depending on your target, but safe to run)
+    process_stick(h, rx, ry, &h->ema_rx, &h->ema_ry, &h->was_active_r, &h->land_offset_r,
+                  circ_error, jitter_mag, jitter_inner, jitter_outer, 
+                  smoothing_rate, gate_level, tilt_deg, landing_var);
 }
