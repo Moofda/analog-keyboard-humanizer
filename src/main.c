@@ -158,7 +158,7 @@ void core1_main(void) {
             } else { combo_start_time = 0; }
         }
     }
-
+}
 void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_interface_t const* xid_itf, uint16_t len) {
     (void)dev_addr; (void)instance; (void)len;
     const xinput_gamepad_t* p = &xid_itf->pad;
@@ -249,8 +249,8 @@ int main(void) {
                     watchdog_hw->scratch[0] = 0;
                     watchdog_reboot(0, 0, 10);
                     while(1);
+                }
             }
-        }
         } else {
             uint32_t current_time_us = time_us_32();
             if (current_time_us - last_math_tick_us >= 4000) {
