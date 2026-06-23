@@ -168,6 +168,24 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_i
     tuh_xinput_receive_report(dev_addr, instance);
 }
 
+void tuh_xinput_mount_cb(uint8_t dev_addr, uint8_t instance, const xinputh_interface_t* xinput_itf) {
+    if (xinput_itf->type == XBOX360_WIRELESS && xinput_itf->connected == false) {
+        tuh_xinput_receive_report(dev_addr, instance);
+        return;
+    }
+    tuh_xinput_set_led(dev_addr, instance, 0, true);   // harmless; delete this line if it won't compile
+    tuh_xinput_receive_report(dev_addr, instance);     // <-- the line that starts input flowing
+}
+
+void tuh_xinput_umount_cb(uint8_t dev_addr, uint8_t instance) {
+    (void)dev_addr; (void)instance;
+    uint32_t ints = save_and_disable_interrupts();
+    latest_buttons = 0;
+    raw_lx = raw_ly = raw_rx = raw_ry = 0;
+    raw_lt = raw_rt = 0;
+    restore_interrupts(ints);
+}
+
 int main(void) {
     set_sys_clock_khz(120000, true);
     watchdog_start_tick(12); 
