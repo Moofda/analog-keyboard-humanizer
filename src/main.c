@@ -168,6 +168,11 @@ void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_i
     tuh_xinput_receive_report(dev_addr, instance);
 }
 
+usbh_class_driver_t const* usbh_app_driver_get_cb(uint8_t* driver_count) {
+    *driver_count = 1;
+    return &usbh_xinput_driver;
+}
+
 void tuh_xinput_mount_cb(uint8_t dev_addr, uint8_t instance, const xinputh_interface_t* xinput_itf) {
     (void)xinput_itf;
     tuh_xinput_receive_report(dev_addr, instance);
