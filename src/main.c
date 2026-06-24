@@ -33,7 +33,8 @@ typedef struct {
     uint16_t jitter_outer;    
     uint16_t smoothing_rate;  
     uint16_t gate_level;      
-    uint16_t tilt_deg;        
+    uint16_t variance_level;  
+    int16_t  ergo_tilt;       
     uint16_t landing_var;     
     uint16_t diagonal_feel;   
     uint16_t anti_deadzone;   
@@ -70,7 +71,8 @@ void load_settings_from_flash(void) {
         active_config.jitter_outer   = 100;
         active_config.smoothing_rate = 20; 
         active_config.gate_level     = 0;
-        active_config.tilt_deg       = 5;   
+        active_config.variance_level = 4;   
+        active_config.ergo_tilt      = 0;   
         active_config.landing_var    = 50;
         active_config.diagonal_feel  = 15; 
         active_config.anti_deadzone  = 0;
@@ -97,9 +99,9 @@ void process_web_serial_commands(void) {
         
         // --- 1. INSTANT RAM UPDATE (No Reboot) ---
         if (strncmp(buffer, "LIVE:", 5) == 0) {
-            int c, jm, ji, jo, s, g, t, l, df, ad, p;
-            if (sscanf(buffer, "LIVE:%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", 
-                       &c, &jm, &ji, &jo, &s, &g, &t, &l, &df, &ad, &p) == 11) {
+            int c, jm, ji, jo, s, g, v, et, l, df, ad, p;
+            if (sscanf(buffer, "LIVE:%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", 
+                       &c, &jm, &ji, &jo, &s, &g, &v, &et, &l, &df, &ad, &p) == 12) {
                 // Update the active configuration in RAM instantly
                 active_config.circ_error     = (uint16_t)c;
                 active_config.jitter_mag     = (uint16_t)jm;
@@ -107,7 +109,8 @@ void process_web_serial_commands(void) {
                 active_config.jitter_outer   = (uint16_t)jo;
                 active_config.smoothing_rate = (uint16_t)s;
                 active_config.gate_level     = (uint16_t)g;
-                active_config.tilt_deg       = (uint16_t)t;
+                active_config.variance_level = (uint16_t)v;
+                active_config.ergo_tilt      = (int16_t)et;
                 active_config.landing_var    = (uint16_t)l;
                 active_config.diagonal_feel  = (uint16_t)df;
                 active_config.anti_deadzone  = (uint16_t)ad;
@@ -228,7 +231,7 @@ int main(void) {
                                   active_config.circ_error,
                                   active_config.jitter_mag, active_config.jitter_inner, active_config.jitter_outer,
                                   active_config.smoothing_rate, active_config.gate_level,
-                                  active_config.tilt_deg, active_config.landing_var,
+                                  active_config.variance_level, active_config.ergo_tilt, active_config.landing_var,
                                   active_config.diagonal_feel, active_config.anti_deadzone,
                                   active_config.passthrough);
                 preview_lx = lx; preview_ly = ly;
@@ -266,7 +269,7 @@ int main(void) {
                                   active_config.circ_error, 
                                   active_config.jitter_mag, active_config.jitter_inner, active_config.jitter_outer,
                                   active_config.smoothing_rate, active_config.gate_level,
-                                  active_config.tilt_deg, active_config.landing_var, 
+                                  active_config.variance_level, active_config.ergo_tilt, active_config.landing_var, 
                                   active_config.diagonal_feel, active_config.anti_deadzone,
                                   active_config.passthrough);
 
