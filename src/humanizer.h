@@ -24,7 +24,7 @@ void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int1
                        uint16_t circ_error, 
                        uint16_t jitter_mag, uint16_t jitter_inner, uint16_t jitter_outer, 
                        uint16_t smoothing_rate, uint16_t gate_level,
-                       uint16_t tilt_deg, uint16_t landing_var, 
+                       uint16_t variance_level, int16_t ergo_tilt, uint16_t landing_var, 
                        uint16_t diagonal_feel, uint16_t anti_deadzone, uint16_t passthrough);
 
 #endif
