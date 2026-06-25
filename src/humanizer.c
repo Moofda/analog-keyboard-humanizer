@@ -17,25 +17,25 @@ static float clamp_abs(float val, float max_val) {
 }
 
 void humanizer_init(Humanizer* h) {
-    h->tremor_state = 0.0f; h->tilt_state = 0.0f; h->gate_state = 0.0f;
+    h->drift_state = 0.0f; h->gate_state = 0.0f;
     h->pos_lx = 0.0f; h->pos_ly = 0.0f;
     h->vel_lx = 0.0f; h->vel_ly = 0.0f;
     h->was_active_l = false; h->land_offset_l = 0.0f;
 }
 
 static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y, 
-                          uint16_t circ_error, uint16_t jitter_mag, uint16_t jitter_inner, uint16_t jitter_outer, 
-                          uint16_t smoothing_rate, uint16_t gate_level, uint16_t variance_level, int16_t ergo_tilt, 
-                          uint16_t landing_var, uint16_t diagonal_feel, uint16_t anti_deadzone) {
+                          uint16_t circ_error, uint16_t smoothing_rate, uint16_t anti_deadzone, 
+                          uint16_t diagonal_feel, uint16_t walk_drift, uint16_t sprint_drift, 
+                          uint16_t gate_slip, uint16_t landing_var) {
     
-    // --- BACKGROUND STOCHASTIC PINK NOISE (Boosted for actual output) ---
-    float noise_tremor = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
-    float noise_tilt   = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
-    float noise_gate   = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+    // --- BACKGROUND STOCHASTIC PINK NOISE ---
+    float noise_drift = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+    float noise_gate  = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
 
-    h->tremor_state = clamp_abs((h->tremor_state * 0.90f) + (noise_tremor * 0.25f), 1.0f); 
-    h->tilt_state   = clamp_abs((h->tilt_state * 0.995f) + (noise_tilt * 0.05f), 1.0f);   
-    h->gate_state   = clamp_abs((h->gate_state * 0.95f) + (noise_gate * 0.15f), 1.0f); 
+    // Slow, sweeping drift for wandering angles
+    h->drift_state = clamp_abs((h->drift_state * 0.995f) + (noise_drift * 0.05f), 1.0f);   
+    // Faster slop for magnitude regressions
+    h->gate_state  = clamp_abs((h->gate_state * 0.90f) + (noise_gate * 0.20f), 1.0f); 
 
     // Normalize input
     float tx = (float)(*axis_x) / 32767.0f;
@@ -50,7 +50,7 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         ty = (ty / raw_mag_initial) * scaled_mag;
     }
 
-    // 2. Elliptical Grid Mapping
+    // 2. Elliptical Grid Mapping (Circularity)
     if (circ_error < 50) {
         float circle_tx = tx * sqrtf(1.0f - (ty * ty) / 2.0f);
         float circle_ty = ty * sqrtf(1.0f - (tx * tx) / 2.0f);
@@ -59,15 +59,17 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         ty = circle_ty + (ty - circle_ty) * blend;
     }
 
-    // 3. Axis Coupling
+    // 3. Axis Coupling (Diagonal Drag with Multiplicative Friction)
     if (diagonal_feel > 0) {
-        float blend = (diagonal_feel / 100.0f) * 0.30f; 
+        float blend = (diagonal_feel / 100.0f) * 0.08f; 
         float abs_x = fabsf(tx);
         float abs_y = fabsf(ty);
-        if (abs_x > abs_y && abs_y > 0.01f) {
-            ty += (tx > 0.0f ? abs_y : -abs_y) * blend; 
-        } else if (abs_y > abs_x && abs_x > 0.01f) {
-            tx += (ty > 0.0f ? abs_x : -abs_x) * blend;
+        if (abs_x > 0.01f && abs_y > 0.01f) {
+            if (abs_x > abs_y) {
+                ty *= (1.0f - (abs_x * blend)); 
+            } else {
+                tx *= (1.0f - (abs_y * blend));
+            }
         }
     }
 
@@ -106,50 +108,34 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
     float angle = atan2f(y, x);
 
     if (mag > 0.01f) {
-        // --- FIXED: Circle to Square Boundary ---
         float square_max = 1.0f / fmaxf(fabsf(cosf(angle)), fabsf(sinf(angle)));
         float allowed_max = 1.0f + (square_max - 1.0f) * (circ_error / 50.0f);
         if (mag > allowed_max) mag = allowed_max;
         
-        float deflection = mag > 1.0f ? 1.0f : mag; // Keep at 1.0 for wobble math
+        float deflection = mag > 1.0f ? 1.0f : mag; 
 
-        // 6. Landing Variation
+        // 6. Initial Stride Offset (Landing Variation)
         if (landing_var > 0) {
             if (!(h->was_active_l) && mag > 0.05f) { 
                 h->land_offset_l = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f; 
                 h->was_active_l = true;
             }
-            float land_deg_max = (landing_var / 100.0f) * 6.0f; 
-            float land_rad = (h->land_offset_l) * (land_deg_max * (float)M_PI / 180.0f);
+            float land_rad = h->land_offset_l * ((float)landing_var * (M_PI / 180.0f));
             angle += land_rad; 
         }
         
-        // 7. Steady Stick Deflection Variance
-        if (variance_level > 0) {
-            float variance_max = (variance_level / 100.0f) * 15.0f * (M_PI / 180.0f);
-            angle += (h->tilt_state) * variance_max * deflection;
+        // 7. Dynamic Axis Drift (Merged Sway & Variance)
+        if (walk_drift > 0 || sprint_drift > 0) {
+            float current_drift_deg = (float)walk_drift + ((float)sprint_drift - (float)walk_drift) * deflection;
+            float drift_rad = current_drift_deg * (M_PI / 180.0f);
+            angle += h->drift_state * drift_rad;
         }
 
-        // 8. Dynamic Wobble
-        if (jitter_mag > 0) {
-            float max_wobble = (jitter_mag / 100.0f) * (6.0f * (M_PI / 180.0f));
-            float inner = jitter_inner / 100.0f;
-            float outer = jitter_outer / 100.0f;
-            float curve = inner + (outer - inner) * deflection; 
-            angle += (h->tremor_state) * max_wobble * curve;
-        }
-
-        // 9. Gate Slop
-        if (gate_level > 0 && mag > 0.8f) { 
-            float edge_fade = (mag - 0.8f) / 0.2f; 
-            if (edge_fade > 1.0f) edge_fade = 1.0f;
-            float slop = (gate_level / 100.0f) * 0.05f * (h->gate_state);
-            mag += (slop * edge_fade);
-        }
-
-        // 10. Ergonomic Tilt (True Static Rotation)
-        if (ergo_tilt != 0) {
-            angle += ergo_tilt * (M_PI / 180.0f);
+        // 8. Gate Slip (Magnitude Regression at 100% Deflection)
+        if (gate_slip > 0 && mag > 0.99f) { 
+            // Maximum mathematical dip is 3%
+            float slip_amount = (gate_slip / 100.0f) * 0.03f * fabsf(h->gate_state);
+            mag -= slip_amount;
         }
 
         x = cosf(angle) * mag;
@@ -167,15 +153,14 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
 }
 
 void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int16_t* ry,
-                       uint16_t circ_error, uint16_t jitter_mag, uint16_t jitter_inner, uint16_t jitter_outer, 
-                       uint16_t smoothing_rate, uint16_t gate_level, uint16_t variance_level, int16_t ergo_tilt, uint16_t landing_var, 
-                       uint16_t diagonal_feel, uint16_t anti_deadzone, uint16_t passthrough) {
+                       uint16_t circ_error, uint16_t smoothing_rate, uint16_t anti_deadzone, 
+                       uint16_t diagonal_feel, uint16_t walk_drift, uint16_t sprint_drift, 
+                       uint16_t gate_slip, uint16_t landing_var, uint16_t passthrough) {
     
     if (passthrough) return; 
 
     // We ONLY process the left stick. Right stick (Mouse Aim) bypasses the CPU completely.
     process_left_stick(h, lx, ly, 
-                       circ_error, jitter_mag, jitter_inner, jitter_outer, 
-                       smoothing_rate, gate_level, variance_level, ergo_tilt, landing_var, 
-                       diagonal_feel, anti_deadzone);
+                       circ_error, smoothing_rate, anti_deadzone, diagonal_feel, 
+                       walk_drift, sprint_drift, gate_slip, landing_var);
 }
