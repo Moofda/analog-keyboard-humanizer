@@ -6,8 +6,7 @@
 
 typedef struct {
     // Stochastic Pink Noise States (EMA)
-    float tremor_state;
-    float tilt_state;
+    float drift_state;
     float gate_state;
     
     // 2nd-Order Physics State Variables
@@ -21,10 +20,8 @@ typedef struct {
 void humanizer_init(Humanizer* h);
 
 void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int16_t* ry,
-                       uint16_t circ_error, 
-                       uint16_t jitter_mag, uint16_t jitter_inner, uint16_t jitter_outer, 
-                       uint16_t smoothing_rate, uint16_t gate_level,
-                       uint16_t variance_level, int16_t ergo_tilt, uint16_t landing_var, 
-                       uint16_t diagonal_feel, uint16_t anti_deadzone, uint16_t passthrough);
+                       uint16_t circ_error, uint16_t smoothing_rate, uint16_t anti_deadzone, 
+                       uint16_t diagonal_feel, uint16_t walk_drift, uint16_t sprint_drift, 
+                       uint16_t gate_slip, uint16_t landing_var, uint16_t passthrough);
 
 #endif
