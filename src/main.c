@@ -238,7 +238,7 @@ int main(void) {
             }
 
             uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-            if (now_ms - last_preview_ms >= 33) {
+            if (now_ms - last_preview_ms >= 8) {
                 last_preview_ms = now_ms;
                 char msg[24];
                 int n = snprintf(msg, sizeof(msg), "P:%d,%d\n", preview_lx, preview_ly);
