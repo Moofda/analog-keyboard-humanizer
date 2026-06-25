@@ -9,7 +9,7 @@
 #include "hardware/watchdog.h" 
 #include "hardware/flash.h"    
 #include "hardware/sync.h"
-#include "hardware/adc.h" // Needed for thermal entropy
+#include "hardware/adc.h" 
 
 #include "pio_usb.h"         
 #include "tusb.h"
@@ -22,22 +22,19 @@ bool tud_in_config_mode(void);
 
 #define USB_HOST_PWR_PIN 18
 #define CONFIG_MAGIC_NUM 0x1A2B3C4D 
-#define FLASH_MAGIC_KEY 0x48554D50   
+#define FLASH_MAGIC_KEY 0x48554D52 // Updated key to force clean flash overwrite
 #define FLASH_TARGET_OFFSET (1024 * 1024) 
 
 typedef struct {
     uint32_t magic;           
     uint16_t circ_error;      
-    uint16_t jitter_mag;      
-    uint16_t jitter_inner;    
-    uint16_t jitter_outer;    
     uint16_t smoothing_rate;  
-    uint16_t gate_level;      
-    uint16_t variance_level;  
-    int16_t  ergo_tilt;       
-    uint16_t landing_var;     
-    uint16_t diagonal_feel;   
     uint16_t anti_deadzone;   
+    uint16_t diagonal_feel;   
+    uint16_t walk_drift;      
+    uint16_t sprint_drift;    
+    uint16_t gate_slip;       
+    uint16_t landing_var;     
     uint16_t passthrough;     
 } humanizer_config_t;
 
@@ -66,16 +63,13 @@ void load_settings_from_flash(void) {
     } else {
         active_config.magic = FLASH_MAGIC_KEY;
         active_config.circ_error     = 3; 
-        active_config.jitter_mag     = 50;    
-        active_config.jitter_inner   = 15; 
-        active_config.jitter_outer   = 100;
         active_config.smoothing_rate = 20; 
-        active_config.gate_level     = 0;
-        active_config.variance_level = 4;   
-        active_config.ergo_tilt      = 0;   
-        active_config.landing_var    = 50;
-        active_config.diagonal_feel  = 15; 
-        active_config.anti_deadzone  = 0;
+        active_config.anti_deadzone  = 5;
+        active_config.diagonal_feel  = 12; 
+        active_config.walk_drift     = 4;   
+        active_config.sprint_drift   = 2;   
+        active_config.gate_slip      = 50;  
+        active_config.landing_var    = 2;
         active_config.passthrough    = 0;
     }
 }
@@ -99,21 +93,18 @@ void process_web_serial_commands(void) {
         
         // --- 1. INSTANT RAM UPDATE (No Reboot) ---
         if (strncmp(buffer, "LIVE:", 5) == 0) {
-            int c, jm, ji, jo, s, g, v, et, l, df, ad, p;
-            if (sscanf(buffer, "LIVE:%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d,%d", 
-                       &c, &jm, &ji, &jo, &s, &g, &v, &et, &l, &df, &ad, &p) == 12) {
+            int c, s, ad, df, wd, sd, gs, l, p;
+            if (sscanf(buffer, "LIVE:%d,%d,%d,%d,%d,%d,%d,%d,%d", 
+                       &c, &s, &ad, &df, &wd, &sd, &gs, &l, &p) == 9) {
                 // Update the active configuration in RAM instantly
                 active_config.circ_error     = (uint16_t)c;
-                active_config.jitter_mag     = (uint16_t)jm;
-                active_config.jitter_inner   = (uint16_t)ji;
-                active_config.jitter_outer   = (uint16_t)jo;
                 active_config.smoothing_rate = (uint16_t)s;
-                active_config.gate_level     = (uint16_t)g;
-                active_config.variance_level = (uint16_t)v;
-                active_config.ergo_tilt      = (int16_t)et;
-                active_config.landing_var    = (uint16_t)l;
-                active_config.diagonal_feel  = (uint16_t)df;
                 active_config.anti_deadzone  = (uint16_t)ad;
+                active_config.diagonal_feel  = (uint16_t)df;
+                active_config.walk_drift     = (uint16_t)wd;
+                active_config.sprint_drift   = (uint16_t)sd;
+                active_config.gate_slip      = (uint16_t)gs;
+                active_config.landing_var    = (uint16_t)l;
                 active_config.passthrough    = (uint16_t)p;
             }
         }
@@ -144,7 +135,7 @@ void core1_main(void) {
     pio_cfg.pin_dp = 16; 
     tuh_configure(BOARD_TUH_RHPORT, TUH_CFGID_RPI_PIO_USB_CONFIGURATION, &pio_cfg);
     tuh_init(BOARD_TUH_RHPORT);
- while (true) {
+    while (true) {
         tuh_task();
         if (!tud_in_config_mode()) {
             uint32_t now = to_ms_since_boot(get_absolute_time());
@@ -162,6 +153,7 @@ void core1_main(void) {
         }
     }
 }
+
 void tuh_xinput_report_received_cb(uint8_t dev_addr, uint8_t instance, xinputh_interface_t const* xid_itf, uint16_t len) {
     (void)dev_addr; (void)instance; (void)len;
     const xinput_gamepad_t* p = &xid_itf->pad;
@@ -183,7 +175,6 @@ void tuh_xinput_mount_cb(uint8_t dev_addr, uint8_t instance, const xinputh_inter
     (void)xinput_itf;
     tuh_xinput_receive_report(dev_addr, instance);
 }
-
 
 void tuh_xinput_umount_cb(uint8_t dev_addr, uint8_t instance) {
     (void)dev_addr; (void)instance;
@@ -218,7 +209,7 @@ int main(void) {
     
     while (true) {
         tud_task(); 
- if (tud_in_config_mode()) {
+        if (tud_in_config_mode()) {
             process_web_serial_commands();
 
             uint32_t now_us = time_us_32();
@@ -228,17 +219,16 @@ int main(void) {
                 int16_t lx = raw_lx, ly = raw_ly, rx = raw_rx, ry = raw_ry;
                 restore_interrupts(ints);
                 humanizer_process(&humanizer, &lx, &ly, &rx, &ry,
-                                  active_config.circ_error,
-                                  active_config.jitter_mag, active_config.jitter_inner, active_config.jitter_outer,
-                                  active_config.smoothing_rate, active_config.gate_level,
-                                  active_config.variance_level, active_config.ergo_tilt, active_config.landing_var,
-                                  active_config.diagonal_feel, active_config.anti_deadzone,
+                                  active_config.circ_error, active_config.smoothing_rate, 
+                                  active_config.anti_deadzone, active_config.diagonal_feel,
+                                  active_config.walk_drift, active_config.sprint_drift,
+                                  active_config.gate_slip, active_config.landing_var,
                                   active_config.passthrough);
                 preview_lx = lx; preview_ly = ly;
             }
 
             uint32_t now_ms = to_ms_since_boot(get_absolute_time());
-            if (now_ms - last_preview_ms >= 8) {
+            if (now_ms - last_preview_ms >= 8) { // 125Hz Fast Web Canvas
                 last_preview_ms = now_ms;
                 char msg[24];
                 int n = snprintf(msg, sizeof(msg), "P:%d,%d\n", preview_lx, preview_ly);
@@ -266,11 +256,10 @@ int main(void) {
                 restore_interrupts(ints);
 
                 humanizer_process(&humanizer, &lx, &ly, &rx, &ry,
-                                  active_config.circ_error, 
-                                  active_config.jitter_mag, active_config.jitter_inner, active_config.jitter_outer,
-                                  active_config.smoothing_rate, active_config.gate_level,
-                                  active_config.variance_level, active_config.ergo_tilt, active_config.landing_var, 
-                                  active_config.diagonal_feel, active_config.anti_deadzone,
+                                  active_config.circ_error, active_config.smoothing_rate, 
+                                  active_config.anti_deadzone, active_config.diagonal_feel,
+                                  active_config.walk_drift, active_config.sprint_drift,
+                                  active_config.gate_slip, active_config.landing_var,
                                   active_config.passthrough);
 
                 current_report[0] = 0x00; current_report[1] = 0x14;
