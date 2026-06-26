@@ -17,7 +17,7 @@ static float clamp_abs(float val, float max_val) {
 }
 
 void humanizer_init(Humanizer* h) {
-    h->drift_state = 0.0f; h->gate_state = 0.0f;
+    h->drift_x = 0.0f; h->drift_y = 0.0f; h->gate_state = 0.0f;
     h->pos_lx = 0.0f; h->pos_ly = 0.0f;
     h->vel_lx = 0.0f; h->vel_ly = 0.0f;
     h->was_active_l = false; h->land_offset_l = 0.0f;
@@ -28,7 +28,6 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
                           uint16_t diagonal_feel, uint16_t walk_drift, uint16_t sprint_drift, 
                           uint16_t gate_slip, uint16_t landing_var) {
     
-    // Normalize input
     float tx = (float)(*axis_x) / 32767.0f;
     float ty = (float)(*axis_y) / 32767.0f;
 
@@ -41,7 +40,7 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         ty = (ty / raw_mag_initial) * scaled_mag;
     }
 
-    // 2. Elliptical Grid Mapping (Circularity)
+    // 2. Circularity
     if (circ_error < 50) {
         float circle_tx = tx * sqrtf(1.0f - (ty * ty) / 2.0f);
         float circle_ty = ty * sqrtf(1.0f - (tx * tx) / 2.0f);
@@ -50,17 +49,14 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         ty = circle_ty + (ty - circle_ty) * blend;
     }
 
-    // 3. Axis Coupling (Diagonal Drag with Multiplicative Friction)
+    // 3. Diagonal Drag
     if (diagonal_feel > 0) {
         float blend = (diagonal_feel / 100.0f) * 0.08f; 
         float abs_x = fabsf(tx);
         float abs_y = fabsf(ty);
         if (abs_x > 0.01f && abs_y > 0.01f) {
-            if (abs_x > abs_y) {
-                ty *= (1.0f - (abs_x * blend)); 
-            } else {
-                tx *= (1.0f - (abs_y * blend));
-            }
+            if (abs_x > abs_y) { ty *= (1.0f - (abs_x * blend)); } 
+            else { tx *= (1.0f - (abs_y * blend)); }
         }
     }
 
@@ -69,45 +65,56 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
     float target_angle = atan2f(ty, tx);
 
     if (target_mag > 0.01f) {
-        // --- HUMAN FLAW GENERATION (Applied BEFORE smoothing) ---
-        float noise_drift = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+        // Generate independent 2D noise
+        float noise_x = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+        float noise_y = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
         float noise_gate  = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
 
-        // Fast update rate; the physical spring will smooth this out later
-        h->drift_state = clamp_abs((h->drift_state * 0.90f) + (noise_drift * 0.10f), 1.0f);   
+        // Uses the SLOW 0.995f multiplier for lazy, heavy thumb wandering
+        h->drift_x = clamp_abs((h->drift_x * 0.995f) + (noise_x * 0.05f), 1.0f);   
+        h->drift_y = clamp_abs((h->drift_y * 0.995f) + (noise_y * 0.05f), 1.0f);   
         h->gate_state  = clamp_abs((h->gate_state * 0.80f) + (noise_gate * 0.20f), 1.0f); 
 
-        // A. Initial Stride Offset (The off-axis landing bias)
+        // A. Initial Stride Offset (The permanent off-axis landing bias)
         if (!(h->was_active_l)) { 
             h->land_offset_l = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f; 
             h->was_active_l = true;
         }
-        // Safely scale landing_var to a max of ~6 degrees, even if UI sends "20"
         float safe_land_deg = (landing_var > 10) ? (landing_var / 100.0f) * 6.0f : (float)landing_var;
         float land_rad = h->land_offset_l * (safe_land_deg * (M_PI / 180.0f));
         target_angle += land_rad; 
-        
-        // B. Dynamic Axis Drift (The tiny thumb wobble)
-        float deflection = target_mag > 1.0f ? 1.0f : target_mag; 
-        if (walk_drift > 0 || sprint_drift > 0) {
-            float current_drift_deg = (float)walk_drift + ((float)sprint_drift - (float)walk_drift) * deflection;
-            target_angle += h->drift_state * (current_drift_deg * (M_PI / 180.0f));
-        }
 
-        // C. Gate Slip (Magnitude Regression at 100% Deflection)
+        // B. Gate Slip 
         if (gate_slip > 0 && target_mag > 0.99f) { 
             float slip_amount = (gate_slip / 100.0f) * 0.03f * fabsf(h->gate_state);
             target_mag -= slip_amount;
         }
-
-        // Keep target inside square bounds before feeding to spring
-        float square_max = 1.0f / fmaxf(fabsf(cosf(target_angle)), fabsf(sinf(target_angle)));
-        float allowed_max = 1.0f + (square_max - 1.0f) * (circ_error / 50.0f);
-        if (target_mag > allowed_max) target_mag = allowed_max;
         
-        // Convert the flawed, wobbly target back to X/Y
+        // Convert the angle-flawed target back to X/Y space
         tx = cosf(target_angle) * target_mag;
         ty = sinf(target_angle) * target_mag;
+
+        // C. Dynamic Cartesian Drift (The independent 2D wobble)
+        float deflection = target_mag > 1.0f ? 1.0f : target_mag; 
+        if (walk_drift > 0 || sprint_drift > 0) {
+            float current_drift_deg = (float)walk_drift + ((float)sprint_drift - (float)walk_drift) * deflection;
+            float drift_scale = current_drift_deg * (M_PI / 180.0f);
+            
+            // Apply noise directly to the grid coordinates!
+            tx += h->drift_x * drift_scale;
+            ty += h->drift_y * drift_scale;
+        }
+
+        // Final boundary clamp to prevent Cartesian drift from pushing past square bounds
+        float final_target_angle = atan2f(ty, tx);
+        float square_max = 1.0f / fmaxf(fabsf(cosf(final_target_angle)), fabsf(sinf(final_target_angle)));
+        float allowed_max = 1.0f + (square_max - 1.0f) * (circ_error / 50.0f);
+        float final_target_mag = sqrtf(tx*tx + ty*ty);
+        if (final_target_mag > allowed_max) {
+            tx = (tx / final_target_mag) * allowed_max;
+            ty = (ty / final_target_mag) * allowed_max;
+        }
+
     } else {
         h->was_active_l = false;
         tx = 0.0f; ty = 0.0f;
@@ -115,7 +122,6 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
 
     // --- THE PHYSICAL FILTER ---
     // 4. Inertia Smoothing (The heavy physical spring)
-    // We feed the noisy target (tx, ty) into the spring to make it smooth and organic
     if (smoothing_rate == 0) {
         h->pos_lx = tx; h->pos_ly = ty;
         h->vel_lx = 0.0f; h->vel_ly = 0.0f;
@@ -136,8 +142,8 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
     
     // 5. Magnitude Recovery
     float spring_mag = sqrtf((h->pos_lx)*(h->pos_lx) + (h->pos_ly)*(h->pos_ly));
-    float final_target_mag = sqrtf(tx*tx + ty*ty);
-    if (final_target_mag > 0.95f && spring_mag < 0.95f && spring_mag > 0.1f) {
+    float final_mag_check = sqrtf(tx*tx + ty*ty);
+    if (final_mag_check > 0.95f && spring_mag < 0.95f && spring_mag > 0.1f) {
         float correction = 1.0f + (0.95f - spring_mag) * 0.3f; 
         h->pos_lx *= correction;
         h->pos_ly *= correction;
@@ -157,7 +163,6 @@ void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int1
     
     if (passthrough) return; 
 
-    // We ONLY process the left stick. Right stick (Mouse Aim) bypasses the CPU completely.
     process_left_stick(h, lx, ly, 
                        circ_error, smoothing_rate, anti_deadzone, diagonal_feel, 
                        walk_drift, sprint_drift, gate_slip, landing_var);
