@@ -71,8 +71,8 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         float noise_gate  = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
 
         // Uses the SLOW 0.995f multiplier for lazy, heavy thumb wandering
-        h->drift_x = clamp_abs((h->drift_x * 0.995f) + (noise_x * 0.05f), 1.0f);   
-        h->drift_y = clamp_abs((h->drift_y * 0.995f) + (noise_y * 0.05f), 1.0f);   
+        h->drift_x = clamp_abs((h->drift_x * 0.995f) + (noise_x * 0.005f), 1.0f);   
+        h->drift_y = clamp_abs((h->drift_y * 0.995f) + (noise_y * 0.005f), 1.0f);   
         h->gate_state  = clamp_abs((h->gate_state * 0.80f) + (noise_gate * 0.20f), 1.0f); 
 
         // A. Initial Stride Offset (The permanent off-axis landing bias)
