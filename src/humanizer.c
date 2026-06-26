@@ -28,15 +28,6 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
                           uint16_t diagonal_feel, uint16_t walk_drift, uint16_t sprint_drift, 
                           uint16_t gate_slip, uint16_t landing_var) {
     
-    // --- BACKGROUND STOCHASTIC PINK NOISE ---
-    float noise_drift = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
-    float noise_gate  = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
-
-    // Slow, sweeping drift for wandering angles
-    h->drift_state = clamp_abs((h->drift_state * 0.995f) + (noise_drift * 0.05f), 1.0f);   
-    // Faster slop for magnitude regressions
-    h->gate_state  = clamp_abs((h->gate_state * 0.90f) + (noise_gate * 0.20f), 1.0f); 
-
     // Normalize input
     float tx = (float)(*axis_x) / 32767.0f;
     float ty = (float)(*axis_y) / 32767.0f;
@@ -73,9 +64,58 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         }
     }
 
+    // --- CALCULATE TARGET COORDINATE ---
     float target_mag = sqrtf(tx*tx + ty*ty);
+    float target_angle = atan2f(ty, tx);
 
-    // 4. Inertia Smoothing
+    if (target_mag > 0.01f) {
+        // --- HUMAN FLAW GENERATION (Applied BEFORE smoothing) ---
+        float noise_drift = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+        float noise_gate  = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+
+        // Fast update rate; the physical spring will smooth this out later
+        h->drift_state = clamp_abs((h->drift_state * 0.90f) + (noise_drift * 0.10f), 1.0f);   
+        h->gate_state  = clamp_abs((h->gate_state * 0.80f) + (noise_gate * 0.20f), 1.0f); 
+
+        // A. Initial Stride Offset (The off-axis landing bias)
+        if (!(h->was_active_l)) { 
+            h->land_offset_l = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f; 
+            h->was_active_l = true;
+        }
+        // Safely scale landing_var to a max of ~6 degrees, even if UI sends "20"
+        float safe_land_deg = (landing_var > 10) ? (landing_var / 100.0f) * 6.0f : (float)landing_var;
+        float land_rad = h->land_offset_l * (safe_land_deg * (M_PI / 180.0f));
+        target_angle += land_rad; 
+        
+        // B. Dynamic Axis Drift (The tiny thumb wobble)
+        float deflection = target_mag > 1.0f ? 1.0f : target_mag; 
+        if (walk_drift > 0 || sprint_drift > 0) {
+            float current_drift_deg = (float)walk_drift + ((float)sprint_drift - (float)walk_drift) * deflection;
+            target_angle += h->drift_state * (current_drift_deg * (M_PI / 180.0f));
+        }
+
+        // C. Gate Slip (Magnitude Regression at 100% Deflection)
+        if (gate_slip > 0 && target_mag > 0.99f) { 
+            float slip_amount = (gate_slip / 100.0f) * 0.03f * fabsf(h->gate_state);
+            target_mag -= slip_amount;
+        }
+
+        // Keep target inside square bounds before feeding to spring
+        float square_max = 1.0f / fmaxf(fabsf(cosf(target_angle)), fabsf(sinf(target_angle)));
+        float allowed_max = 1.0f + (square_max - 1.0f) * (circ_error / 50.0f);
+        if (target_mag > allowed_max) target_mag = allowed_max;
+        
+        // Convert the flawed, wobbly target back to X/Y
+        tx = cosf(target_angle) * target_mag;
+        ty = sinf(target_angle) * target_mag;
+    } else {
+        h->was_active_l = false;
+        tx = 0.0f; ty = 0.0f;
+    }
+
+    // --- THE PHYSICAL FILTER ---
+    // 4. Inertia Smoothing (The heavy physical spring)
+    // We feed the noisy target (tx, ty) into the spring to make it smooth and organic
     if (smoothing_rate == 0) {
         h->pos_lx = tx; h->pos_ly = ty;
         h->vel_lx = 0.0f; h->vel_ly = 0.0f;
@@ -96,60 +136,18 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
     
     // 5. Magnitude Recovery
     float spring_mag = sqrtf((h->pos_lx)*(h->pos_lx) + (h->pos_ly)*(h->pos_ly));
-    if (target_mag > 0.95f && spring_mag < 0.95f && spring_mag > 0.1f) {
+    float final_target_mag = sqrtf(tx*tx + ty*ty);
+    if (final_target_mag > 0.95f && spring_mag < 0.95f && spring_mag > 0.1f) {
         float correction = 1.0f + (0.95f - spring_mag) * 0.3f; 
         h->pos_lx *= correction;
         h->pos_ly *= correction;
     }
 
-    float x = h->pos_lx;
-    float y = h->pos_ly;
-    float mag = sqrtf(x*x + y*y);
-    float angle = atan2f(y, x);
+    float final_x = clamp_abs(h->pos_lx, 1.0f);
+    float final_y = clamp_abs(h->pos_ly, 1.0f);
 
-    if (mag > 0.01f) {
-        float square_max = 1.0f / fmaxf(fabsf(cosf(angle)), fabsf(sinf(angle)));
-        float allowed_max = 1.0f + (square_max - 1.0f) * (circ_error / 50.0f);
-        if (mag > allowed_max) mag = allowed_max;
-        
-        float deflection = mag > 1.0f ? 1.0f : mag; 
-
-        // 6. Initial Stride Offset (Landing Variation)
-        if (landing_var > 0) {
-            if (!(h->was_active_l) && mag > 0.05f) { 
-                h->land_offset_l = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f; 
-                h->was_active_l = true;
-            }
-            float land_rad = h->land_offset_l * ((float)landing_var * (M_PI / 180.0f));
-            angle += land_rad; 
-        }
-        
-        // 7. Dynamic Axis Drift (Merged Sway & Variance)
-        if (walk_drift > 0 || sprint_drift > 0) {
-            float current_drift_deg = (float)walk_drift + ((float)sprint_drift - (float)walk_drift) * deflection;
-            float drift_rad = current_drift_deg * (M_PI / 180.0f);
-            angle += h->drift_state * drift_rad;
-        }
-
-        // 8. Gate Slip (Magnitude Regression at 100% Deflection)
-        if (gate_slip > 0 && mag > 0.99f) { 
-            // Maximum mathematical dip is 3%
-            float slip_amount = (gate_slip / 100.0f) * 0.03f * fabsf(h->gate_state);
-            mag -= slip_amount;
-        }
-
-        x = cosf(angle) * mag;
-        y = sinf(angle) * mag;
-    } else {
-        h->was_active_l = false;
-        h->land_offset_l = 0.0f;
-    }
-
-    x = clamp_abs(x, 1.0f);
-    y = clamp_abs(y, 1.0f);
-
-    *axis_x = (int16_t)(x * 32767.0f);
-    *axis_y = (int16_t)(y * 32767.0f);
+    *axis_x = (int16_t)(final_x * 32767.0f);
+    *axis_y = (int16_t)(final_y * 32767.0f);
 }
 
 void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int16_t* ry,
