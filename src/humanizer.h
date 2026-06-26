@@ -5,8 +5,9 @@
 #include <stdbool.h>
 
 typedef struct {
-    // Stochastic Pink Noise States (EMA)
-    float drift_state;
+    // We now use TWO independent waves for realistic 2D wandering
+    float drift_x;
+    float drift_y;
     float gate_state;
     
     // 2nd-Order Physics State Variables
