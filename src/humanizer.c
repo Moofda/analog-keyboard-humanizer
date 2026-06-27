@@ -29,7 +29,7 @@ void humanizer_init(Humanizer* h) {
 
 static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y, 
                           uint16_t circ_error, uint16_t smoothing_rate, uint16_t anti_deadzone, 
-                          uint16_t diagonal_feel, uint16_t walk_drift, uint16_t sprint_drift, 
+                          uint16_t walk_drift, uint16_t sprint_drift, 
                           uint16_t gate_slip, uint16_t landing_var) {
     
     // Normalize Input
@@ -65,15 +65,7 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         ty = circle_ty + (ty - circle_ty) * blend;
     }
 
-    // 3. Diagonal Drag
-    if (diagonal_feel > 0) {
-        float blend = (diagonal_feel / 100.0f) * 0.08f; 
-        float abs_x = fabsf(tx);
-        float abs_y = fabsf(ty);
-        if (abs_x > 0.01f && abs_y > 0.01f) {
-            if (abs_x > abs_y) { ty *= (1.0f - (abs_x * blend)); } 
-            else { tx *= (1.0f - (abs_y * blend)); }
-        }
+    
     }
 
     // --- CALCULATE TARGET COORDINATE ---
@@ -173,12 +165,12 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
 
 void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int16_t* ry,
                        uint16_t circ_error, uint16_t smoothing_rate, uint16_t anti_deadzone, 
-                       uint16_t diagonal_feel, uint16_t walk_drift, uint16_t sprint_drift, 
+                       uint16_t walk_drift, uint16_t sprint_drift, 
                        uint16_t gate_slip, uint16_t landing_var, uint16_t passthrough) {
     
     if (passthrough) return; 
 
     process_left_stick(h, lx, ly, 
-                       circ_error, smoothing_rate, anti_deadzone, diagonal_feel, 
+                       circ_error, smoothing_rate, anti_deadzone, 
                        walk_drift, sprint_drift, gate_slip, landing_var);
 }
