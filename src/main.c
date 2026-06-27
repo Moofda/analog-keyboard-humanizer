@@ -30,7 +30,6 @@ typedef struct {
     uint16_t circ_error;      
     uint16_t smoothing_rate;  
     uint16_t anti_deadzone;   
-    uint16_t diagonal_feel;   
     uint16_t walk_drift;      
     uint16_t sprint_drift;    
     uint16_t gate_slip;       
@@ -65,7 +64,6 @@ void load_settings_from_flash(void) {
         active_config.circ_error     = 3; 
         active_config.smoothing_rate = 20; 
         active_config.anti_deadzone  = 5;
-        active_config.diagonal_feel  = 12; 
         active_config.walk_drift     = 4;   
         active_config.sprint_drift   = 2;   
         active_config.gate_slip      = 50;  
@@ -93,14 +91,13 @@ void process_web_serial_commands(void) {
         
         // --- 1. INSTANT RAM UPDATE (No Reboot) ---
         if (strncmp(buffer, "LIVE:", 5) == 0) {
-            int c, s, ad, df, wd, sd, gs, l, p;
-            if (sscanf(buffer, "LIVE:%d,%d,%d,%d,%d,%d,%d,%d,%d", 
-                       &c, &s, &ad, &df, &wd, &sd, &gs, &l, &p) == 9) {
+            int c, s, ad, wd, sd, gs, l, p;
+            if (sscanf(buffer, "LIVE:%d,%d,%d,%d,%d,%d,%d,%d", 
+                       &c, &s, &ad, &wd, &sd, &gs, &l, &p) == 8) {
                 // Update the active configuration in RAM instantly
                 active_config.circ_error     = (uint16_t)c;
                 active_config.smoothing_rate = (uint16_t)s;
                 active_config.anti_deadzone  = (uint16_t)ad;
-                active_config.diagonal_feel  = (uint16_t)df;
                 active_config.walk_drift     = (uint16_t)wd;
                 active_config.sprint_drift   = (uint16_t)sd;
                 active_config.gate_slip      = (uint16_t)gs;
@@ -218,12 +215,14 @@ int main(void) {
                 uint32_t ints = save_and_disable_interrupts();
                 int16_t lx = raw_lx, ly = raw_ly, rx = raw_rx, ry = raw_ry;
                 restore_interrupts(ints);
+                
                 humanizer_process(&humanizer, &lx, &ly, &rx, &ry,
                                   active_config.circ_error, active_config.smoothing_rate, 
-                                  active_config.anti_deadzone, active_config.diagonal_feel,
+                                  active_config.anti_deadzone,
                                   active_config.walk_drift, active_config.sprint_drift,
                                   active_config.gate_slip, active_config.landing_var,
                                   active_config.passthrough);
+                                  
                 preview_lx = lx; preview_ly = ly;
             }
 
@@ -257,7 +256,7 @@ int main(void) {
 
                 humanizer_process(&humanizer, &lx, &ly, &rx, &ry,
                                   active_config.circ_error, active_config.smoothing_rate, 
-                                  active_config.anti_deadzone, active_config.diagonal_feel,
+                                  active_config.anti_deadzone,
                                   active_config.walk_drift, active_config.sprint_drift,
                                   active_config.gate_slip, active_config.landing_var,
                                   active_config.passthrough);
