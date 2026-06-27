@@ -17,8 +17,10 @@ static float clamp_abs(float val, float max_val) {
 }
 
 void humanizer_init(Humanizer* h) {
+    h->drift_x = 0.0f; h->drift_y = 0.0f;
+    h->target_x = 0.0f; h->target_y = 0.0f;
     h->gate_state = 0.0f;
-    h->tilt_state = 0.0f;
+    h->stride_state = 0.0f;
     h->pos_lx = 0.0f; h->pos_ly = 0.0f;
     h->vel_lx = 0.0f; h->vel_ly = 0.0f;
     h->was_active_l = false; 
@@ -33,6 +35,17 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
     // Normalize Input
     float tx = (float)(*axis_x) / 32767.0f;
     float ty = (float)(*axis_y) / 32767.0f;
+
+    // --- CONTINUOUS BACKGROUND ENTROPY ---
+    // 1. Cartesian Macro-Fatigue (Target-Seeking)
+    if (fabsf(h->drift_x - h->target_x) < 0.05f) h->target_x = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+    if (fabsf(h->drift_y - h->target_y) < 0.05f) h->target_y = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+    h->drift_x += (h->target_x - h->drift_x) * 0.002f;
+    h->drift_y += (h->target_y - h->drift_y) * 0.002f;
+
+    // 2. Outer Gate Friction
+    float noise_gate = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+    h->gate_state = clamp_abs((h->gate_state * 0.80f) + (noise_gate * 0.20f), 1.0f);
 
     // 1. Anti-Deadzone
     float raw_mag_initial = sqrtf(tx*tx + ty*ty);
@@ -67,30 +80,25 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
     float target_mag = sqrtf(tx*tx + ty*ty);
     float target_angle = atan2f(ty, tx);
 
-    // --- CONTINUOUS BACKGROUND ENTROPY ---
-    // Runs constantly so the gate friction state is always unpredictable
-    float noise_gate = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
-    h->gate_state = clamp_abs((h->gate_state * 0.80f) + (noise_gate * 0.20f), 1.0f);
-
     if (target_mag > 0.01f) {
         
         float deflection = target_mag > 1.0f ? 1.0f : target_mag; 
 
-        // A. Ergonomic Tilt (The Sweeping Arc)
+        // A. Initial Stride Offset (The Sweeping Arc)
         if (!(h->was_active_l)) { 
             h->land_offset_l = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f; 
-            h->tilt_state = 0.0f; // Reset the pivot state
+            h->stride_state = 0.0f; // Reset the pivot state
             h->was_active_l = true;
         }
 
-        // The EMA smoothly rolls the tilt state toward the target offset
-        h->tilt_state = (h->tilt_state * 0.90f) + (h->land_offset_l * 0.10f);
+        // The EMA smoothly rolls the stride state toward the target offset
+        h->stride_state = (h->stride_state * 0.90f) + (h->land_offset_l * 0.10f);
 
         float safe_land_deg = (landing_var > 10) ? (landing_var / 100.0f) * 6.0f : (float)landing_var;
-        float tilt_max = safe_land_deg * (M_PI / 180.0f);
+        float stride_max = safe_land_deg * (M_PI / 180.0f);
         
         // The angle perfectly scales with physical switch deflection 
-        target_angle += (h->tilt_state) * tilt_max * deflection; 
+        target_angle += (h->stride_state) * stride_max * deflection; 
 
         // B. Gate Slip 
         if (gate_slip > 0 && target_mag > 0.99f) { 
@@ -101,6 +109,16 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         // Convert the angle-flawed target back to X/Y space
         tx = cosf(target_angle) * target_mag;
         ty = sinf(target_angle) * target_mag;
+
+        // C. Dynamic Cartesian Drift (The independent 2D macro-fatigue)
+        if (walk_drift > 0 || sprint_drift > 0) {
+            float current_drift_deg = (float)walk_drift + ((float)sprint_drift - (float)walk_drift) * deflection;
+            float drift_scale = current_drift_deg * (M_PI / 180.0f);
+            
+            // Multiplied by deflection to prevent center snap / wiper effect
+            tx += h->drift_x * (drift_scale * deflection);
+            ty += h->drift_y * (drift_scale * deflection);
+        }
 
         // Final boundary clamp to prevent pushes past square bounds
         float final_target_angle = atan2f(ty, tx);
