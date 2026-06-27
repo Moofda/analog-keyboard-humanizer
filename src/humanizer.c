@@ -65,9 +65,6 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         ty = circle_ty + (ty - circle_ty) * blend;
     }
 
-    
-    }
-
     // --- CALCULATE TARGET COORDINATE ---
     float target_mag = sqrtf(tx*tx + ty*ty);
     float target_angle = atan2f(ty, tx);
