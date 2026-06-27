@@ -5,9 +5,15 @@
 #include <stdbool.h>
 
 typedef struct {
-    // Current state variables
+    // Continuous 2D Target-Seeking State
+    float drift_x;
+    float drift_y;
+    float target_x;
+    float target_y;
+    
+    // Gate Friction & Stride State
     float gate_state;
-    float tilt_state; // The EMA state for the sweeping arc
+    float stride_state; // The EMA state for the sweeping arc
     
     // 2nd-Order Physics State Variables
     float pos_lx, pos_ly;
