@@ -17,30 +17,18 @@ static float clamp_abs(float val, float max_val) {
 }
 
 void humanizer_init(Humanizer* h) {
-    h->drift_x = 0.0f; h->drift_y = 0.0f; h->gate_state = 0.0f;
-    h->target_x = 0.0f; h->target_y = 0.0f; h->target_gate = 0.0f;
+    h->gate_state = 0.0f;
+    h->tilt_state = 0.0f;
     h->pos_lx = 0.0f; h->pos_ly = 0.0f;
     h->vel_lx = 0.0f; h->vel_ly = 0.0f;
-    h->was_active_l = false; h->land_offset_l = 0.0f;
+    h->was_active_l = false; 
+    h->land_offset_l = 0.0f;
 }
 
 static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y, 
                           uint16_t circ_error, uint16_t smoothing_rate, uint16_t anti_deadzone, 
                           uint16_t diagonal_feel, uint16_t walk_drift, uint16_t sprint_drift, 
                           uint16_t gate_slip, uint16_t landing_var) {
-    
-    // --- CONTINUOUS BACKGROUND WANDER (Target-Seeking) ---
-    // This runs constantly, ensuring your starting posture is unpredictable
-    
-    // If the virtual thumb is close to its target, pick a new random target between -1.0 and 1.0
-    if (fabsf(h->drift_x - h->target_x) < 0.05f) h->target_x = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
-    if (fabsf(h->drift_y - h->target_y) < 0.05f) h->target_y = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
-    if (fabsf(h->gate_state - h->target_gate) < 0.05f) h->target_gate = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
-    
-    // Smoothly glide toward the chosen targets (Lower multiplier = slower, lazier thumb)
-    h->drift_x += (h->target_x - h->drift_x) * 0.002f;
-    h->drift_y += (h->target_y - h->drift_y) * 0.002f;
-    h->gate_state += (h->target_gate - h->gate_state) * 0.02f; 
     
     // Normalize Input
     float tx = (float)(*axis_x) / 32767.0f;
@@ -79,16 +67,30 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
     float target_mag = sqrtf(tx*tx + ty*ty);
     float target_angle = atan2f(ty, tx);
 
-    if (target_mag > 0.01f) {
+    // --- CONTINUOUS BACKGROUND ENTROPY ---
+    // Runs constantly so the gate friction state is always unpredictable
+    float noise_gate = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f;
+    h->gate_state = clamp_abs((h->gate_state * 0.80f) + (noise_gate * 0.20f), 1.0f);
 
-        // A. Initial Stride Offset (The permanent off-axis landing bias)
+    if (target_mag > 0.01f) {
+        
+        float deflection = target_mag > 1.0f ? 1.0f : target_mag; 
+
+        // A. Ergonomic Tilt (The Sweeping Arc)
         if (!(h->was_active_l)) { 
             h->land_offset_l = ((float)rand() / (float)RAND_MAX) * 2.0f - 1.0f; 
+            h->tilt_state = 0.0f; // Reset the pivot state
             h->was_active_l = true;
         }
+
+        // The EMA smoothly rolls the tilt state toward the target offset
+        h->tilt_state = (h->tilt_state * 0.90f) + (h->land_offset_l * 0.10f);
+
         float safe_land_deg = (landing_var > 10) ? (landing_var / 100.0f) * 6.0f : (float)landing_var;
-        float land_rad = h->land_offset_l * (safe_land_deg * (M_PI / 180.0f));
-        target_angle += land_rad; 
+        float tilt_max = safe_land_deg * (M_PI / 180.0f);
+        
+        // The angle perfectly scales with physical switch deflection 
+        target_angle += (h->tilt_state) * tilt_max * deflection; 
 
         // B. Gate Slip 
         if (gate_slip > 0 && target_mag > 0.99f) { 
@@ -100,18 +102,7 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         tx = cosf(target_angle) * target_mag;
         ty = sinf(target_angle) * target_mag;
 
-        // C. Dynamic Cartesian Drift (The independent 2D wobble)
-        float deflection = target_mag > 1.0f ? 1.0f : target_mag; 
-        if (walk_drift > 0 || sprint_drift > 0) {
-            float current_drift_deg = (float)walk_drift + ((float)sprint_drift - (float)walk_drift) * deflection;
-            float drift_scale = current_drift_deg * (M_PI / 180.0f);
-            
-            // Because h->drift_x successfully spans -1.0 to 1.0 now, this is fully visible!
-            tx += h->drift_x * drift_scale;
-            ty += h->drift_y * drift_scale;
-        }
-
-        // Final boundary clamp to prevent Cartesian drift from pushing past square bounds
+        // Final boundary clamp to prevent pushes past square bounds
         float final_target_angle = atan2f(ty, tx);
         float square_max = 1.0f / fmaxf(fabsf(cosf(final_target_angle)), fabsf(sinf(final_target_angle)));
         float allowed_max = 1.0f + (square_max - 1.0f) * (circ_error / 50.0f);
