@@ -5,15 +5,9 @@
 #include <stdbool.h>
 
 typedef struct {
-    // Current positions of the wandering thumb
-    float drift_x;
-    float drift_y;
+    // Current state variables
     float gate_state;
-    
-    // The target destinations the thumb is gliding toward
-    float target_x;
-    float target_y;
-    float target_gate;
+    float tilt_state; // The EMA state for the sweeping arc
     
     // 2nd-Order Physics State Variables
     float pos_lx, pos_ly;
