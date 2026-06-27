@@ -322,19 +322,6 @@
         </div>
     </div>
 
-    <div class="control">
-        <div class="control-top">
-            <span class="control-name">Diagonal strafing drag</span>
-            <span class="chip" id="diagonal_v">12</span>
-        </div>
-        <p class="control-desc">Acts as mathematical glue between switches. Fakes the physical friction of a single stick pivoting on its central dome.</p>
-        <div class="track-wrap">
-            <span class="rec-tick" style="left:12%"></span>
-            <input type="range" id="diagonal" min="0" max="100" value="12">
-            <span class="rec-label">recommended 12</span>
-        </div>
-    </div>
-
     <div class="divider"></div>
 
     <p class="section-label">Sway &amp; character</p>
@@ -450,7 +437,6 @@
         circ: $("circ"), circ_v: $("circ_v"),
         smoothing: $("smoothing"), smoothing_v: $("smoothing_v"),
         anti: $("anti"), anti_v: $("anti_v"),
-        diagonal: $("diagonal"), diagonal_v: $("diagonal_v"),
         walk_drift: $("walk_drift"), walk_drift_v: $("walk_drift_v"),
         sprint_drift: $("sprint_drift"), sprint_drift_v: $("sprint_drift_v"),
         gate_slip: $("gate_slip"), gate_slip_v: $("gate_slip_v"),
@@ -461,7 +447,6 @@
         ["circ", "circ_v"],
         ["smoothing", "smoothing_v"],
         ["anti", "anti_v"],
-        ["diagonal", "diagonal_v"],
         ["walk_drift", "walk_drift_v"],
         ["sprint_drift", "sprint_drift_v"],
         ["gate_slip", "gate_slip_v"],
@@ -469,12 +454,12 @@
     ];
 
     const RECOMMENDED = {
-        circ: 3, smoothing: 20, anti: 5, diagonal: 12,
+        circ: 3, smoothing: 20, anti: 5,
         walk_drift: 4, sprint_drift: 2, gate_slip: 50, landing: 2,
         passthrough: false
     };
     const ZERO = {
-        circ: 0, smoothing: 0, anti: 0, diagonal: 0,
+        circ: 0, smoothing: 0, anti: 0,
         walk_drift: 0, sprint_drift: 0, gate_slip: 0, landing: 0,
         passthrough: false
     };
@@ -492,12 +477,12 @@
         els.statusText.textContent = on ? "Linked" : "Offline";
     }
 
-    // 9 parameters match the new C firmware
+    // 8 parameters match the new C firmware
     function sendLive() {
         if (!writer) return;
         const v = (id) => els[id].value;
         const cmd =
-            `LIVE:${v("circ")},${v("smoothing")},${v("anti")},${v("diagonal")},` +
+            `LIVE:${v("circ")},${v("smoothing")},${v("anti")},` +
             `${v("walk_drift")},${v("sprint_drift")},${v("gate_slip")},${v("landing")},` +
             `${els.passthrough.checked ? 1 : 0}\n`;
         writer.write(encoder.encode(cmd)).catch(() => {});
