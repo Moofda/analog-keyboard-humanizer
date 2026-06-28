@@ -329,7 +329,7 @@
     <div class="group">
         <p class="group-title">Dynamic Axis Drift</p>
         
-        <p class="control-desc" style="margin-top:-10px; margin-bottom: 16px;">Applies a slow, organic wave to your output angle emulating a thumb on a stick toward a single axis</p>
+        <p class="control-desc" style="margin-top:-10px; margin-bottom: 16px;">Applies a slow, organic wave (oscillator-driven) to your output angle, emulating a thumb swaying on a stick. Walk/sprint set the wave's strength; the texture sliders below add random imperfection on top.</p>
 
         <div class="control">
             <div class="control-top">
@@ -354,6 +354,63 @@
                 <span class="rec-tick" style="left:20%"></span>
                 <input type="range" id="sprint_drift" min="0" max="10" value="2">
                 <span class="rec-label">recommended 2°</span>
+            </div>
+        </div>
+
+        <div class="control">
+            <div class="control-top">
+                <span class="control-name">Texture · light press</span>
+                <span class="chip" id="texture_walk_v">20</span>
+            </div>
+            <p class="control-desc">How much random crawl is layered on the oscillator wave at partial press. Breaks up the wave's regularity so it never looks patterned. 0 = pure wave.</p>
+            <div class="track-wrap">
+                <span class="rec-tick" style="left:20%"></span>
+                <input type="range" id="texture_walk" min="0" max="100" value="20">
+                <span class="rec-label">recommended 20</span>
+            </div>
+        </div>
+
+        <div class="control">
+            <div class="control-top">
+                <span class="control-name">Texture · bottomed out</span>
+                <span class="chip" id="texture_sprint_v">8</span>
+            </div>
+            <p class="control-desc">Random crawl amount at full deflection. Usually lower than light-press texture, since the gate tremor takes over as the dominant imperfection up here.</p>
+            <div class="track-wrap">
+                <span class="rec-tick" style="left:8%"></span>
+                <input type="range" id="texture_sprint" min="0" max="100" value="8">
+                <span class="rec-label">recommended 8</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="group">
+        <p class="group-title">Gate Tremor</p>
+        <p class="control-desc" style="margin-top:-10px; margin-bottom: 16px;">A tiny side-to-side angular shake that only appears near full deflection, emulating a thumb micro-trembling against the plastic gate. Fades in above 85% deflection so it never touches walking.</p>
+
+        <div class="control">
+            <div class="control-top">
+                <span class="control-name">Tremor strength</span>
+                <span class="chip" id="wobble_deg_v">6</span>
+            </div>
+            <p class="control-desc">Maximum shake angle, in tenths of a degree (6 = 0.6°). Set to 0 to disable the tremor entirely.</p>
+            <div class="track-wrap">
+                <span class="rec-tick" style="left:20%"></span>
+                <input type="range" id="wobble_deg" min="0" max="30" value="6">
+                <span class="rec-label">recommended 6</span>
+            </div>
+        </div>
+
+        <div class="control">
+            <div class="control-top">
+                <span class="control-name">Tremor speed</span>
+                <span class="chip" id="wobble_freq_v">7</span>
+            </div>
+            <p class="control-desc">How fast the tremor shakes, in Hz. Lower feels like a slow waver; higher feels like a fine buzz. Around 6–8 Hz mimics a real hand.</p>
+            <div class="track-wrap">
+                <span class="rec-tick" style="left:35%"></span>
+                <input type="range" id="wobble_freq" min="0" max="20" value="7">
+                <span class="rec-label">recommended 7</span>
             </div>
         </div>
     </div>
@@ -441,6 +498,10 @@
         sprint_drift: $("sprint_drift"), sprint_drift_v: $("sprint_drift_v"),
         gate_slip: $("gate_slip"), gate_slip_v: $("gate_slip_v"),
         landing: $("landing"), landing_v: $("landing_v"),
+        texture_walk: $("texture_walk"), texture_walk_v: $("texture_walk_v"),
+        texture_sprint: $("texture_sprint"), texture_sprint_v: $("texture_sprint_v"),
+        wobble_deg: $("wobble_deg"), wobble_deg_v: $("wobble_deg_v"),
+        wobble_freq: $("wobble_freq"), wobble_freq_v: $("wobble_freq_v"),
     };
 
     const SLIDERS = [
@@ -451,16 +512,22 @@
         ["sprint_drift", "sprint_drift_v"],
         ["gate_slip", "gate_slip_v"],
         ["landing", "landing_v"],
+        ["texture_walk", "texture_walk_v"],
+        ["texture_sprint", "texture_sprint_v"],
+        ["wobble_deg", "wobble_deg_v"],
+        ["wobble_freq", "wobble_freq_v"],
     ];
 
     const RECOMMENDED = {
         circ: 3, smoothing: 20, anti: 5,
         walk_drift: 4, sprint_drift: 2, gate_slip: 50, landing: 2,
+        texture_walk: 20, texture_sprint: 8, wobble_deg: 6, wobble_freq: 7,
         passthrough: false
     };
     const ZERO = {
         circ: 0, smoothing: 0, anti: 0,
         walk_drift: 0, sprint_drift: 0, gate_slip: 0, landing: 0,
+        texture_walk: 0, texture_sprint: 0, wobble_deg: 0, wobble_freq: 0,
         passthrough: false
     };
 
@@ -477,14 +544,15 @@
         els.statusText.textContent = on ? "Linked" : "Offline";
     }
 
-    // 8 parameters match the new C firmware
+    // 12 parameters match the new C firmware
     function sendLive() {
         if (!writer) return;
         const v = (id) => els[id].value;
         const cmd =
             `LIVE:${v("circ")},${v("smoothing")},${v("anti")},` +
             `${v("walk_drift")},${v("sprint_drift")},${v("gate_slip")},${v("landing")},` +
-            `${els.passthrough.checked ? 1 : 0}\n`;
+            `${els.passthrough.checked ? 1 : 0},` +
+            `${v("texture_walk")},${v("texture_sprint")},${v("wobble_deg")},${v("wobble_freq")}\n`;
         writer.write(encoder.encode(cmd)).catch(() => {});
     }
 
