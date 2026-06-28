@@ -384,6 +384,32 @@
         </div>
     </div>
 
+    <div class="control">
+        <div class="control-top">
+            <span class="control-name">Thumb Weight (Bloom Speed)</span>
+            <span class="chip" id="stride_weight_v">10</span>
+        </div>
+        <p class="control-desc">Lower is a heavier, slower thumb sweep. Higher is a faster, lighter snap.</p>
+        <div class="track-wrap">
+            <span class="rec-tick" style="left:10%"></span>
+            <input type="range" id="stride_weight" min="1" max="100" value="10">
+            <span class="rec-label">recommended 10</span>
+        </div>
+    </div>
+
+    <div class="control">
+        <div class="control-top">
+            <span class="control-name">Travel Arc Shape</span>
+            <span class="chip" id="stride_shape_v">50</span>
+        </div>
+        <p class="control-desc">50 is perfectly linear. &lt;50 bows early, &gt;50 creates a late, aggressive hook.</p>
+        <div class="track-wrap">
+            <span class="rec-tick" style="left:50%"></span>
+            <input type="range" id="stride_shape" min="1" max="100" value="50">
+            <span class="rec-label">recommended 50</span>
+        </div>
+    </div>
+
     <div class="toggle">
         <input type="checkbox" id="passthrough">
         <label for="passthrough">
@@ -433,7 +459,7 @@
         scope: $("scope"),
         passthrough: $("passthrough"),
         
-        // 7 remaining sliders
+        // 9 sliders now
         circ: $("circ"), circ_v: $("circ_v"),
         smoothing: $("smoothing"), smoothing_v: $("smoothing_v"),
         anti: $("anti"), anti_v: $("anti_v"),
@@ -441,6 +467,8 @@
         sprint_drift: $("sprint_drift"), sprint_drift_v: $("sprint_drift_v"),
         gate_slip: $("gate_slip"), gate_slip_v: $("gate_slip_v"),
         landing: $("landing"), landing_v: $("landing_v"),
+        stride_weight: $("stride_weight"), stride_weight_v: $("stride_weight_v"),
+        stride_shape: $("stride_shape"), stride_shape_v: $("stride_shape_v")
     };
 
     const SLIDERS = [
@@ -451,16 +479,20 @@
         ["sprint_drift", "sprint_drift_v"],
         ["gate_slip", "gate_slip_v"],
         ["landing", "landing_v"],
+        ["stride_weight", "stride_weight_v"],
+        ["stride_shape", "stride_shape_v"]
     ];
 
     const RECOMMENDED = {
         circ: 3, smoothing: 20, anti: 5,
         walk_drift: 4, sprint_drift: 2, gate_slip: 50, landing: 2,
+        stride_weight: 10, stride_shape: 50,
         passthrough: false
     };
     const ZERO = {
         circ: 0, smoothing: 0, anti: 0,
         walk_drift: 0, sprint_drift: 0, gate_slip: 0, landing: 0,
+        stride_weight: 10, stride_shape: 50, // Best left at default defaults when math is bypassed
         passthrough: false
     };
 
@@ -477,13 +509,14 @@
         els.statusText.textContent = on ? "Linked" : "Offline";
     }
 
-    // 8 parameters match the new C firmware
+    // 10 parameters now match the newly updated C firmware
     function sendLive() {
         if (!writer) return;
         const v = (id) => els[id].value;
         const cmd =
             `LIVE:${v("circ")},${v("smoothing")},${v("anti")},` +
             `${v("walk_drift")},${v("sprint_drift")},${v("gate_slip")},${v("landing")},` +
+            `${v("stride_weight")},${v("stride_shape")},` +
             `${els.passthrough.checked ? 1 : 0}\n`;
         writer.write(encoder.encode(cmd)).catch(() => {});
     }
@@ -656,7 +689,7 @@
 
         const active = (performance.now() - lastPacket) < 250 && (Math.abs(previewX) > 0.02 || Math.abs(previewY) > 0.02);
 
-        // live dot (trail removed)
+        // live dot
         ctx.fillStyle = active ? "#FFB020" : "#3a4f5e";
         if (active) { ctx.shadowColor = "#FFB020"; ctx.shadowBlur = 12; }
         ctx.beginPath(); ctx.arc(dx, dy, 5.5, 0, Math.PI * 2); ctx.fill();
