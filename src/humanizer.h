@@ -21,6 +21,10 @@ typedef struct {
     
     bool was_active_l;
     float land_offset_l;
+
+    // --- TEST BRANCH ADDITIONS (appended, never reordered) ---
+    float osc_phase[4];   // phase accumulators for Lissajous drift oscillators
+    float wobble_phase;   // phase for high-deflection gate tremor
 } Humanizer;
 
 void humanizer_init(Humanizer* h);
@@ -28,6 +32,8 @@ void humanizer_init(Humanizer* h);
 void humanizer_process(Humanizer* h, int16_t* lx, int16_t* ly, int16_t* rx, int16_t* ry,
                        uint16_t circ_error, uint16_t smoothing_rate, uint16_t anti_deadzone, 
                        uint16_t walk_drift, uint16_t sprint_drift, 
-                       uint16_t gate_slip, uint16_t landing_var, uint16_t passthrough);
+                       uint16_t gate_slip, uint16_t landing_var, uint16_t passthrough,
+                       uint16_t texture_walk, uint16_t texture_sprint,
+                       uint16_t wobble_deg, uint16_t wobble_freq);
 
 #endif
