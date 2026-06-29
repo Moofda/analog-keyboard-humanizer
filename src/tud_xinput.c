@@ -21,10 +21,10 @@ return is_config_mode;
 // 1. ISOLATED DEVICE DESCRIPTORS
 // ====================================================================
 
-// Mode A: 8BitDo Ultimate Wired Controller (Endpoint 0: 8 Bytes)
+// Mode A: Xbox 360 Wired Controller (Endpoint 0: 8 Bytes)
 static const uint8_t desc_device_xinput[] = {
 0x12, 0x01, 0x00, 0x02, 0xFF, 0xFF, 0xFF, 0x08, // Max Packet Size 0 = 8
-0xC8, 0x2D, 0x06, 0x31, 0x14, 0x01, 0x01, 0x02, 0x03, 0x01 // VID/PID: 0x2DC8 / 0x3106
+0x5E, 0x04, 0x8E, 0x02, 0x14, 0x01, 0x01, 0x02, 0x03, 0x01 // VID/PID: 0x045E / 0x028E (Microsoft Xbox 360)
 };
 
 // Mode B: Raspberry Pi CDC Serial Port (Endpoint 0: 8 Bytes - MATCHES CONFIG)
@@ -87,9 +87,9 @@ return is_config_mode ? desc_config_cdc : desc_config_xinput;
 // ====================================================================
 static const char* string_desc_arr[] = {
 (const char[]) { 0x09, 0x04 },
-"8BitDo",
+"Microsoft",
 
-"8BitDo Ultimate Wired Controller",
+"Xbox 360 Controller for Windows",
 
 "000000000001"
 
