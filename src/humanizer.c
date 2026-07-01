@@ -36,11 +36,11 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
     float tx = (float)(*axis_x) / 32767.0f;
     float ty = (float)(*axis_y) / 32767.0f;
 
-    // ** BUG FIX 1: RAW DEFLECTION **
-    // Calculate physical switch depth BEFORE circularity or anti-deadzone warps it.
-    // This stops the perimeter sweeps from "pinching" at the diagonals.
-    float raw_deflection = fmaxf(fabsf(tx), fabsf(ty));
-    if (raw_deflection > 1.0f) raw_deflection = 1.0f;
+    // ** BUG FIX 1: THE FMAX PULSE **
+    // The user was completely right: fmaxf created a square map that shrank the deflection
+    // by 30% at the diagonals, causing a 4-point pinch when rolling in a circle. 
+    // We now use true radial magnitude clamped to 1.0 for a perfectly smooth 360 sweep.
+    float input_deflection = fminf(sqrtf(tx*tx + ty*ty), 1.0f);
 
     // --- CONTINUOUS BACKGROUND ENTROPY ---
     // 1. Cartesian Macro-Fatigue (Target-Seeking)
@@ -90,8 +90,8 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         float safe_land_deg = (landing_var > 10) ? (landing_var / 100.0f) * 6.0f : (float)landing_var;
         float stride_max = safe_land_deg * (M_PI / 180.0f);
         
-        // Use the raw_deflection so the arc doesn't shrink on diagonals
-        target_angle += (h->stride_state) * stride_max * raw_deflection; 
+        // Use the smooth input_deflection so the arc doesn't shrink on diagonals
+        target_angle += (h->stride_state) * stride_max * input_deflection; 
 
         // B. Gate Slip 
         if (gate_slip > 0 && target_mag > 0.99f) { 
@@ -107,17 +107,18 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         if (walk_drift > 0 || sprint_drift > 0) {
             float pre_drift_mag = sqrtf(tx*tx + ty*ty);
             
-            float current_drift_deg = (float)walk_drift + ((float)sprint_drift - (float)walk_drift) * raw_deflection;
+            float current_drift_deg = (float)walk_drift + ((float)sprint_drift - (float)walk_drift) * input_deflection;
             float drift_scale = current_drift_deg * (M_PI / 180.0f);
             
             // Multiplied by deflection to prevent center snap / wiper effect
-            tx += h->drift_x * (drift_scale * raw_deflection);
-            ty += h->drift_y * (drift_scale * raw_deflection);
+            tx += h->drift_x * (drift_scale * input_deflection);
+            ty += h->drift_y * (drift_scale * input_deflection);
             
-            // ** BUG FIX 2: DRIFT LOCK **
-            // Forbids the drift from pulling the stick inward and artificially slowing your sprint
+            // ** BUG FIX 2: STRICT DRIFT LOCK **
+            // Completely forbid drift from altering the magnitude in ANY direction.
+            // This stops Cartesian drift from artificially swelling light key presses.
             float post_drift_mag = sqrtf(tx*tx + ty*ty);
-            if (post_drift_mag < pre_drift_mag && post_drift_mag > 0.001f) {
+            if (post_drift_mag > 0.001f) {
                 tx = (tx / post_drift_mag) * pre_drift_mag;
                 ty = (ty / post_drift_mag) * pre_drift_mag;
             }
@@ -154,8 +155,7 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         float force_x = k * (tx - h->pos_lx) - c * (h->vel_lx);
         float force_y = k * (ty - h->pos_ly) - c * (h->vel_ly);
         
-        // ** BUG FIX 3: GYROSCOPIC DAMPING **
-        // Bends the straight-line inertia chords into smooth, organic arcs
+        // Gyroscopic Damping (Bends straight inertia chords into curves)
         float c_perp = c * h->stride_state * 0.35f; 
         force_x += -h->vel_ly * c_perp;
         force_y += h->vel_lx * c_perp;
@@ -163,8 +163,6 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         h->vel_lx += force_x * dt; h->vel_ly += force_y * dt;
         h->pos_lx += (h->vel_lx) * dt; h->pos_ly += (h->vel_ly) * dt;
     }
-    
-    // (MAGNITUDE RECOVERY HAS BEEN DELETED)
 
     float final_x = clamp_abs(h->pos_lx, 1.0f);
     float final_y = clamp_abs(h->pos_ly, 1.0f);
