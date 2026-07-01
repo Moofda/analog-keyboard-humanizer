@@ -74,6 +74,7 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         // ** THE DIAGONAL FIX **
         // Replaces the flawed hypotenuse math with max absolute switch depth
         float deflection = fmaxf(fabsf(tx), fabsf(ty)); 
+        if (deflection > 1.0f) deflection = 1.0f; // Safety clamp
 
         // A. Initial Stride Offset (The Sweeping Arc)
         if (!(h->was_active_l)) { 
@@ -103,12 +104,22 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
 
         // C. Dynamic Cartesian Drift (The independent 2D macro-fatigue)
         if (walk_drift > 0 || sprint_drift > 0) {
+            float pre_drift_mag = sqrtf(tx*tx + ty*ty); // Capture magnitude before drift
+            
             float current_drift_deg = (float)walk_drift + ((float)sprint_drift - (float)walk_drift) * deflection;
             float drift_scale = current_drift_deg * (M_PI / 180.0f);
             
             // Multiplied by deflection to prevent center snap / wiper effect
             tx += h->drift_x * (drift_scale * deflection);
             ty += h->drift_y * (drift_scale * deflection);
+
+            // ** DRIFT LOCK FIX **
+            // Forbids the drift from pulling the stick inward and artificially slowing your sprint
+            float post_drift_mag = sqrtf(tx*tx + ty*ty);
+            if (post_drift_mag < pre_drift_mag && post_drift_mag > 0.001f) {
+                tx = (tx / post_drift_mag) * pre_drift_mag;
+                ty = (ty / post_drift_mag) * pre_drift_mag;
+            }
         }
 
         // Final boundary clamp to prevent pushes past square bounds
@@ -146,14 +157,7 @@ static void process_left_stick(Humanizer* h, int16_t* axis_x, int16_t* axis_y,
         h->pos_lx += (h->vel_lx) * dt; h->pos_ly += (h->vel_ly) * dt;
     }
     
-    // 5. Magnitude Recovery
-    float spring_mag = sqrtf((h->pos_lx)*(h->pos_lx) + (h->pos_ly)*(h->pos_ly));
-    float final_mag_check = sqrtf(tx*tx + ty*ty);
-    if (final_mag_check > 0.95f && spring_mag < 0.95f && spring_mag > 0.1f) {
-        float correction = 1.0f + (0.95f - spring_mag) * 0.3f; 
-        h->pos_lx *= correction;
-        h->pos_ly *= correction;
-    }
+    // (Magnitude Recovery block is completely gone)
 
     float final_x = clamp_abs(h->pos_lx, 1.0f);
     float final_y = clamp_abs(h->pos_ly, 1.0f);
